@@ -429,6 +429,14 @@ std::string _decode_model_enc(const std::string& in)
     v.erase(found + 1);
   }
   std::replace(v.begin(), v.end(), ' ', '_');
+
+  // remove "__", which seems to come up on by ubuntu box for some reason.
+  while (true) {
+    auto p = v.find("__");
+    if (p == std::string::npos) break;
+    v.replace(p, 2, "_");
+  }
+
   return v;
 }
 
@@ -533,7 +541,7 @@ std::string get_device_id(const std::string& devname,
   }
   if (err) {
     if (model.empty() && serial.empty()) {
-      *err = std::string("fallback method has no model nor serial'");
+      *err = std::string("fallback method has no model nor serial");
       return {};
     } else if (model.empty()) {
       *err = std::string("fallback method has serial '") + serial

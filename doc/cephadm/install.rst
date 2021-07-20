@@ -8,9 +8,13 @@ then deploying the needed services.
 
 .. highlight:: console
 
+
+.. _cephadm-host-requirements:
+
 Requirements
 ============
 
+- Python 3
 - Systemd
 - Podman or Docker for running containers
 - Time synchronization (such as chrony or NTP)
@@ -18,6 +22,13 @@ Requirements
 
 Any modern Linux distribution should be sufficient.  Dependencies
 are installed automatically by the bootstrap process below.
+
+See the section :ref:`Compatibility With Podman
+Versions<cephadm-compatibility-with-podman>` for a table of Ceph versions that
+are compatible with Podman. Not every version of Podman is compatible with
+Ceph.
+
+
 
 .. _get-cephadm:
 
@@ -44,8 +55,9 @@ curl-based installation
   standalone script. 
   
   .. prompt:: bash #
+     :substitutions:
 
-   curl --silent --remote-name --location https://github.com/ceph/ceph/raw/octopus/src/cephadm/cephadm
+     curl --silent --remote-name --location https://github.com/ceph/ceph/raw/|stable-release|/src/cephadm/cephadm
 
   Make the ``cephadm`` script executable:
 
@@ -61,13 +73,14 @@ curl-based installation
 
 * Although the standalone script is sufficient to get a cluster started, it is
   convenient to have the ``cephadm`` command installed on the host.  To install
-  the packages that provide the ``cephadm`` command for the Octopus release,
-  run the following commands:
+  the packages that provide the ``cephadm`` command, run the following
+  commands:
 
   .. prompt:: bash #
+     :substitutions:
 
-    ./cephadm add-repo --release octopus
-    ./cephadm install
+     ./cephadm add-repo --release |stable-release|
+     ./cephadm install
 
   Confirm that ``cephadm`` is now in your PATH by running ``which``:
 
@@ -142,11 +155,14 @@ This command will:
   host.
 * Generate a new SSH key for the Ceph cluster and add it to the root
   user's ``/root/.ssh/authorized_keys`` file.
+* Write a copy of the public key to ``/etc/ceph/ceph.pub``.
 * Write a minimal configuration file to ``/etc/ceph/ceph.conf``. This
   file is needed to communicate with the new cluster.
 * Write a copy of the ``client.admin`` administrative (privileged!)
   secret key to ``/etc/ceph/ceph.client.admin.keyring``.
-* Write a copy of the public key to ``/etc/ceph/ceph.pub``.
+* Add the ``_admin`` label to the bootstrap host.  By default, any host
+  with this label will (also) get a copy of ``/etc/ceph/ceph.conf`` and
+  ``/etc/ceph/ceph.client.admin.keyring``.
 
 Further information about cephadm bootstrap 
 -------------------------------------------
@@ -156,6 +172,11 @@ immediately to know more about ``cephadm bootstrap``, read the list below.
 
 Also, you can run ``cephadm bootstrap -h`` to see all of ``cephadm``'s
 available options.
+
+* By default, Ceph daemons send their log output to stdout/stderr, which is picked
+  up by the container runtime (docker or podman) and (on most systems) sent to
+  journald.  If you want Ceph to write traditional log files to ``/var/log/ceph/$fsid``,
+  use ``--log-to-file`` option during bootstrap.
 
 * Larger Ceph clusters perform better when (external to the Ceph cluster)
   public network traffic is separated from (internal to the Ceph cluster)
@@ -178,7 +199,13 @@ available options.
 
 * You can pass any initial Ceph configuration options to the new
   cluster by putting them in a standard ini-style configuration file
-  and using the ``--config *<config-file>*`` option.
+  and using the ``--config *<config-file>*`` option.  For example::
+
+      $ cat <<EOF > initial-ceph.conf
+      [global]
+      osd crush chooseleaf type = 0
+      EOF
+      $ ./cephadm bootstrap --config initial-ceph.conf ...
 
 * The ``--ssh-user *<user>*`` option makes it possible to choose which ssh
   user cephadm will use to connect to hosts. The associated ssh key will be
@@ -236,9 +263,10 @@ command.  There are several ways to do this:
   CephFS file systems), etc.:
 
   .. prompt:: bash #
+     :substitutions:
 
-    cephadm add-repo --release octopus
-    cephadm install ceph-common
+     cephadm add-repo --release |stable-release|
+     cephadm install ceph-common
 
 Confirm that the ``ceph`` command is accessible with:
 
@@ -258,6 +286,16 @@ Adding Hosts
 ============
 
 Next, add all hosts to the cluster by following :ref:`cephadm-adding-hosts`.
+
+By default, a ``ceph.conf`` file and a copy of the ``client.admin`` keyring
+are maintained in ``/etc/ceph`` on all hosts with the ``_admin`` label, which is initially
+applied only to the bootstrap host. We usually recommend that one or more other hosts be
+given the ``_admin`` label so that the Ceph CLI (e.g., via ``cephadm shell``) is easily
+accessible on multiple hosts.  To add the ``_admin`` label to additional host(s),
+
+  .. prompt:: bash #
+
+    ceph orch host label add *<host>* _admin
 
 Adding additional MONs
 ======================

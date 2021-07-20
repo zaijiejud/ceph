@@ -10,7 +10,6 @@ from tests import mock
 
 
 @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
-@mock.patch("cephadm.services.cephadmservice.RgwService.create_realm_zonegroup_zone", lambda _, __, ___: None)
 def test_migrate_scheduler(cephadm_module: CephadmOrchestrator):
     with with_host(cephadm_module, 'host1', refresh_hosts=False):
         with with_host(cephadm_module, 'host2', refresh_hosts=False):
@@ -49,7 +48,7 @@ def test_migrate_scheduler(cephadm_module: CephadmOrchestrator):
 
             cephadm_module.migration_current = 0
             cephadm_module.migration.migrate()
-            assert cephadm_module.migration_current == 2
+            assert cephadm_module.migration_current >= 2
 
             out = [o.spec.placement for o in wait(
                 cephadm_module, cephadm_module.describe_service())]
@@ -79,7 +78,7 @@ def test_migrate_service_id_mon_one(cephadm_module: CephadmOrchestrator):
 
         cephadm_module.migration_current = 1
         cephadm_module.migration.migrate()
-        assert cephadm_module.migration_current == 2
+        assert cephadm_module.migration_current >= 2
 
         assert len(cephadm_module.spec_store.all_specs) == 1
         assert cephadm_module.spec_store.all_specs['mon'] == ServiceSpec(
@@ -122,7 +121,7 @@ def test_migrate_service_id_mon_two(cephadm_module: CephadmOrchestrator):
 
         cephadm_module.migration_current = 1
         cephadm_module.migration.migrate()
-        assert cephadm_module.migration_current == 2
+        assert cephadm_module.migration_current >= 2
 
         assert len(cephadm_module.spec_store.all_specs) == 1
         assert cephadm_module.spec_store.all_specs['mon'] == ServiceSpec(
@@ -150,3 +149,69 @@ def test_migrate_service_id_mds_one(cephadm_module: CephadmOrchestrator):
 
         # there is nothing to migrate, as the spec is gone now.
         assert len(cephadm_module.spec_store.all_specs) == 0
+
+
+@mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
+def test_migrate_nfs_initial(cephadm_module: CephadmOrchestrator):
+    with with_host(cephadm_module, 'host1'):
+        cephadm_module.set_store(
+            SPEC_STORE_PREFIX + 'mds',
+            json.dumps({
+                'spec': {
+                    'service_type': 'nfs',
+                    'service_id': 'foo',
+                    'placement': {
+                        'hosts': ['host1']
+                    },
+                    'spec': {
+                        'pool': 'mypool',
+                        'namespace': 'foons',
+                    },
+                },
+                'created': datetime_to_str(datetime_now()),
+            }, sort_keys=True),
+        )
+        cephadm_module.migration_current = 1
+        cephadm_module.spec_store.load()
+
+        ls = json.loads(cephadm_module.get_store('nfs_migration_queue'))
+        assert ls == [['foo', 'mypool', 'foons']]
+
+        cephadm_module.migration.migrate(True)
+        assert cephadm_module.migration_current == 2
+
+        cephadm_module.migration.migrate()
+        assert cephadm_module.migration_current == 3
+
+
+@mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
+def test_migrate_nfs_initial_octopus(cephadm_module: CephadmOrchestrator):
+    with with_host(cephadm_module, 'host1'):
+        cephadm_module.set_store(
+            SPEC_STORE_PREFIX + 'mds',
+            json.dumps({
+                'spec': {
+                    'service_type': 'nfs',
+                    'service_id': 'ganesha-foo',
+                    'placement': {
+                        'hosts': ['host1']
+                    },
+                    'spec': {
+                        'pool': 'mypool',
+                        'namespace': 'foons',
+                    },
+                },
+                'created': datetime_to_str(datetime_now()),
+            }, sort_keys=True),
+        )
+        cephadm_module.migration_current = 1
+        cephadm_module.spec_store.load()
+
+        ls = json.loads(cephadm_module.get_store('nfs_migration_queue'))
+        assert ls == [['ganesha-foo', 'mypool', 'foons']]
+
+        cephadm_module.migration.migrate(True)
+        assert cephadm_module.migration_current == 2
+
+        cephadm_module.migration.migrate()
+        assert cephadm_module.migration_current == 3

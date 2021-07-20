@@ -1792,7 +1792,7 @@ void ProtocolV2::trigger_replacing(bool reconnect,
 // READY state
 
 ceph::bufferlist ProtocolV2::do_sweep_messages(
-    const std::deque<MessageRef>& msgs,
+    const std::deque<MessageURef>& msgs,
     size_t num_msgs,
     bool require_keepalive,
     std::optional<utime_t> _keepalive_ack,
@@ -1812,13 +1812,13 @@ ceph::bufferlist ProtocolV2::do_sweep_messages(
     INTERCEPT_FRAME(ceph::msgr::v2::Tag::KEEPALIVE2_ACK, bp_type_t::WRITE);
   }
 
-  if (require_ack && !num_msgs) {
+  if (require_ack && num_msgs == 0u) {
     auto ack_frame = AckFrame::Encode(conn.in_seq);
     bl.append(ack_frame.get_buffer(tx_frame_asm));
     INTERCEPT_FRAME(ceph::msgr::v2::Tag::ACK, bp_type_t::WRITE);
   }
 
-  std::for_each(msgs.begin(), msgs.begin()+num_msgs, [this, &bl](const MessageRef& msg) {
+  std::for_each(msgs.begin(), msgs.begin()+num_msgs, [this, &bl](const MessageURef& msg) {
     // TODO: move to common code
     // set priority
     msg->get_header().src = messenger.get_myname();
@@ -1834,8 +1834,8 @@ ceph::bufferlist ProtocolV2::do_sweep_messages(
     ceph_msg_header2 header2{header.seq,        header.tid,
                              header.type,       header.priority,
                              header.version,
-                             init_le32(0),      header.data_off,
-                             init_le64(conn.in_seq),
+                             ceph_le32(0),      header.data_off,
+                             ceph_le64(conn.in_seq),
                              footer.flags,      header.compat_version,
                              header.reserved};
 
@@ -1873,16 +1873,16 @@ seastar::future<> ProtocolV2::read_message(utime_t throttle_stamp)
                            current_header.type,
                            current_header.priority,
                            current_header.version,
-                           init_le32(msg_frame.front_len()),
-                           init_le32(msg_frame.middle_len()),
-                           init_le32(msg_frame.data_len()),
+                           ceph_le32(msg_frame.front_len()),
+                           ceph_le32(msg_frame.middle_len()),
+                           ceph_le32(msg_frame.data_len()),
                            current_header.data_off,
                            conn.get_peer_name(),
                            current_header.compat_version,
                            current_header.reserved,
-                           init_le32(0)};
-    ceph_msg_footer footer{init_le32(0), init_le32(0),
-                           init_le32(0), init_le64(0), current_header.flags};
+                           ceph_le32(0)};
+    ceph_msg_footer footer{ceph_le32(0), ceph_le32(0),
+                           ceph_le32(0), ceph_le64(0), current_header.flags};
 
     auto conn_ref = seastar::static_pointer_cast<SocketConnection>(
         conn.shared_from_this());

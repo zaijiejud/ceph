@@ -18,7 +18,6 @@
 
 namespace crimson::os::seastore {
 
-constexpr size_t MAX_SIZE = std::numeric_limits<size_t>::max();
 std::ostream &operator<<(std::ostream &out, const std::list<std::string> &rhs);
 std::ostream &operator<<(std::ostream &out, const std::map<std::string, std::string> &rhs);
 
@@ -28,7 +27,7 @@ class OMapManager {
   * until these functions future resolved.
   */
 public:
-  using base_ertr = TransactionManager::base_ertr;
+  using base_iertr = TransactionManager::base_iertr;
 
   /**
    * allocate omap tree root node
@@ -36,8 +35,8 @@ public:
    * @param Transaction &t, current transaction
    * @retval return the omap_root_t structure.
    */
-  using initialize_omap_ertr = base_ertr;
-  using initialize_omap_ret = initialize_omap_ertr::future<omap_root_t>;
+  using initialize_omap_iertr = base_iertr;
+  using initialize_omap_ret = initialize_omap_iertr::future<omap_root_t>;
   virtual initialize_omap_ret initialize_omap(Transaction &t) = 0;
 
   /**
@@ -48,8 +47,8 @@ public:
    * @param string &key, omap string key
    * @retval return string key->string value mapping pair.
    */
-  using omap_get_value_ertr = base_ertr;
-  using omap_get_value_ret = omap_get_value_ertr::future<
+  using omap_get_value_iertr = base_iertr;
+  using omap_get_value_ret = omap_get_value_iertr::future<
     std::optional<bufferlist>>;
   virtual omap_get_value_ret omap_get_value(
     const omap_root_t &omap_root,
@@ -64,13 +63,20 @@ public:
    * @param string &key, omap string key
    * @param string &value, mapped value corresponding key
    */
-  using omap_set_key_ertr = base_ertr;
-  using omap_set_key_ret = omap_set_key_ertr::future<>;
+  using omap_set_key_iertr = base_iertr;
+  using omap_set_key_ret = omap_set_key_iertr::future<>;
   virtual omap_set_key_ret omap_set_key(
     omap_root_t &omap_root,
     Transaction &t,
     const std::string &key,
     const ceph::bufferlist &value) = 0;
+
+  using omap_set_keys_iertr = base_iertr;
+  using omap_set_keys_ret = omap_set_keys_iertr::future<>;
+  virtual omap_set_keys_ret omap_set_keys(
+    omap_root_t &omap_root,
+    Transaction &t,
+    std::map<std::string, ceph::bufferlist>&& keys) = 0;
 
   /**
    * remove key value mapping in omap tree
@@ -79,34 +85,73 @@ public:
    * @param Transaction &t,  current transaction
    * @param string &key, omap string key
    */
-  using omap_rm_key_ertr = base_ertr;
-  using omap_rm_key_ret = omap_rm_key_ertr::future<>;
+  using omap_rm_key_iertr = base_iertr;
+  using omap_rm_key_ret = omap_rm_key_iertr::future<>;
   virtual omap_rm_key_ret omap_rm_key(
     omap_root_t &omap_root,
     Transaction &t,
     const std::string &key) = 0;
 
   /**
-   * Ordered scan of key-> value mapping in omap tree
+   * omap_list
+   *
+   * Scans key/value pairs in order.
    *
    * @param omap_root: omap btree root information
    * @param t: current transaction
-   * @param start: the list keys range begin > start if present,
-   *        at beginning if std::nullopt
-   * @param max_result_size: the number of list keys,
-   *        it it is not set, list all keys after string start.
-   * @retval listed key->value mapping and next key
+   * @param start: nullopt sorts before any string, behavior
+   *        based on config.inclusive
+   * @param config: see below for params
+   * @retval listed key->value and bool indicating complete
    */
-  using omap_list_ertr = base_ertr;
-  using omap_list_bare_ret = std::pair<
+  struct omap_list_config_t {
+    /// max results to return
+    size_t max_result_size = 128;
+
+    /// true denotes behavior like lower_bound, upper_bound otherwise
+    bool inclusive = false;
+
+    omap_list_config_t(
+      size_t max_result_size,
+      bool inclusive)
+      : max_result_size(max_result_size),
+	inclusive(inclusive) {}
+    omap_list_config_t() {}
+    omap_list_config_t(const omap_list_config_t &) = default;
+    omap_list_config_t(omap_list_config_t &&) = default;
+    omap_list_config_t &operator=(const omap_list_config_t &) = default;
+    omap_list_config_t &operator=(omap_list_config_t &&) = default;
+
+    static omap_list_config_t with_max(size_t max) {
+      omap_list_config_t ret{};
+      ret.max_result_size = max;
+      return ret;
+    }
+
+    static omap_list_config_t with_inclusive(bool inclusive) {
+      omap_list_config_t ret{};
+      ret.inclusive = inclusive;
+      return ret;
+    }
+
+    auto with_reduced_max(size_t reduced_by) const {
+      assert(reduced_by <= max_result_size);
+      return omap_list_config_t(
+	max_result_size - reduced_by,
+	inclusive
+      );
+    }
+  };
+  using omap_list_iertr = base_iertr;
+  using omap_list_bare_ret = std::tuple<
     bool,
-    std::map<std::string, bufferlist>>;
-  using omap_list_ret = omap_list_ertr::future<omap_list_bare_ret>;
+    std::map<std::string, bufferlist, std::less<>>>;
+  using omap_list_ret = omap_list_iertr::future<omap_list_bare_ret>;
   virtual omap_list_ret omap_list(
     const omap_root_t &omap_root,
     Transaction &t,
     const std::optional<std::string> &start,
-    size_t max_result_size = MAX_SIZE) = 0;
+    omap_list_config_t config = omap_list_config_t()) = 0;
 
   /**
    * clear all omap tree key->value mapping
@@ -114,8 +159,8 @@ public:
    * @param omap_root_t &omap_root,  omap btree root information
    * @param Transaction &t,  current transaction
    */
-  using omap_clear_ertr = base_ertr;
-  using omap_clear_ret = omap_clear_ertr::future<>;
+  using omap_clear_iertr = base_iertr;
+  using omap_clear_ret = omap_clear_iertr::future<>;
   virtual omap_clear_ret omap_clear(omap_root_t &omap_root, Transaction &t) = 0;
 
   virtual ~OMapManager() {}

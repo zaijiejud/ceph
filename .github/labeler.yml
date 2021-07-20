@@ -1,3 +1,6 @@
+api-change:
+  - src/pybind/mgr/dashboard/openapi.yaml
+
 build/ops:
   - "**/CMakeLists.txt"
   - admin/**
@@ -27,6 +30,15 @@ documentation:
   - doc_deps.deb.txt
   - man/**
   - "**/*.+(rst|md)"
+
+libcephsqlite:
+  - doc/rados/api/libcephsqlite.rst
+  - qa/suites/rados/basic/tasks/libcephsqlite.yaml
+  - qa/workunits/rados/test_libcephsqlite.sh
+  - src/SimpleRADOSStriper.*
+  - src/include/libcephsqlite.h
+  - src/libcephsqlite.cc
+  - src/test/libcephsqlite/**
 
 mon:
   - doc/man/8/ceph-mon.rst
@@ -223,3 +235,16 @@ tests:
   - qa/tasks/**
   - qa/workunits/**
   - src/test/**
+
+nfs:
+  - src/pybind/mgr/nfs/**
+  - src/pybind/mgr/cephadm/services/nfs.py
+  - src/pybind/mgr/cephadm/templates/services/nfs/ganesha.conf.j2
+  - src/pybind/mgr/dashboard/services/ganesha.py
+  - src/pybind/mgr/dashboard/tests/test_ganesha.py
+  - qa/tasks/cephfs/test_nfs.py
+  - qa/tasks/mgr/dashboard/test_ganesha.py
+  - doc/mgr/nfs.rst
+  - doc/cephfs/nfs.rst
+  - doc/cephadm/nfs.rst
+  - doc/radosgw/nfs.rst

@@ -481,6 +481,17 @@ cdef class LibCephFS(object):
             for key, value in conf.items():
                 self.conf_set(key, value)
 
+    def get_fscid(self):
+        """
+        Return the file system id for this fs client.
+        """
+        self.require_state("mounted")
+        with nogil:
+            ret = ceph_get_fs_cid(self.cluster)
+        if ret < 0:
+            raise make_ex(ret, "error fetching fscid")
+        return ret
+
     def get_addrs(self):
         """
         Get associated client addresses with this RADOS session.
@@ -621,6 +632,24 @@ cdef class LibCephFS(object):
             ret = ceph_conf_set(self.cluster, _option, _val)
         if ret != 0:
             raise make_ex(ret, "error calling conf_set")
+
+    def set_mount_timeout(self, timeout):
+        """
+        Set mount timeout
+
+        :param timeout: mount timeout
+        """
+        self.require_state("configuring", "initialized")
+        if not isinstance(timeout, int):
+            raise TypeError('timeout must be an integer')
+        if timeout < 0:
+            raise make_ex(CEPHFS_EINVAL, 'timeout must be greater than or equal to 0')
+        cdef:
+            uint32_t _timeout = timeout
+        with nogil:
+            ret = ceph_set_mount_timeout(self.cluster, _timeout)
+        if ret != 0:
+            raise make_ex(ret, "error setting mount timeout")
 
     def init(self):
         """
@@ -1099,6 +1128,26 @@ cdef class LibCephFS(object):
             int _mode = mode
         with nogil:
             ret = ceph_chmod(self.cluster, _path, _mode)
+        if ret < 0:
+            raise make_ex(ret, "error in chmod {}".format(path.decode('utf-8')))
+
+    def lchmod(self, path, mode) -> None:
+        """
+        Change file mode. If the path is a symbolic link, it won't be dereferenced.
+
+        :param path: the path of the file. This must be either an absolute path or
+                     a relative path off of the current working directory.
+        :param mode: the permissions to be set .
+        """
+        self.require_state("mounted")
+        path = cstr(path, 'path')
+        if not isinstance(mode, int):
+            raise TypeError('mode must be an int')
+        cdef:
+            char* _path = path
+            int _mode = mode
+        with nogil:
+            ret = ceph_lchmod(self.cluster, _path, _mode)
         if ret < 0:
             raise make_ex(ret, "error in chmod {}".format(path.decode('utf-8')))
 
@@ -2561,9 +2610,9 @@ cdef class LibCephFS(object):
 
     def get_layout(self, fd):
         """
-        Set ceph client session timeout. Must be called before mount.
+        Get the file layout from an open file descriptor.
 
-        :param fd: file descriptor of the file/directory for which to get the layout
+        :param fd: the open file descriptor referring to the file to get the layout of.
         """
 
         if not isinstance(fd, int):

@@ -41,59 +41,75 @@ Manager <https://prometheus.io/docs/alerting/alertmanager/>`_ and `Grafana
 Deploying monitoring with cephadm
 ---------------------------------
 
-By default, bootstrap will deploy a basic monitoring stack.  If you
-did not do this (by passing ``--skip-monitoring-stack``, or if you
-converted an existing cluster to cephadm management, you can set up
-monitoring by following the steps below.
+The default behavior of ``cephadm`` is to deploy a basic monitoring stack.  It
+is however possible that you have a Ceph cluster without a monitoring stack,
+and you would like to add a monitoring stack to it. (Here are some ways that
+you might have come to have a Ceph cluster without a monitoring stack: You
+might have passed the ``--skip-monitoring stack`` option to ``cephadm`` during
+the installation of the cluster, or you might have converted an existing
+cluster (which had no monitoring stack) to cephadm management.)
 
-#. Enable the prometheus module in the ceph-mgr daemon.  This exposes the internal Ceph metrics so that prometheus can scrape them.
+To set up monitoring on a Ceph cluster that has no monitoring, follow the
+steps below:
 
-   .. code-block:: bash
+#. Enable the Prometheus module in the ceph-mgr daemon. This exposes the internal Ceph metrics so that Prometheus can scrape them:
+
+   .. prompt:: bash #
 
      ceph mgr module enable prometheus
 
-#. Deploy a node-exporter service on every node of the cluster.  The node-exporter provides host-level metrics like CPU and memory utilization.
+#. Deploy a node-exporter service on every node of the cluster.  The node-exporter provides host-level metrics like CPU and memory utilization:
 
-   .. code-block:: bash
+   .. prompt:: bash #
 
      ceph orch apply node-exporter '*'
 
-#. Deploy alertmanager
+#. Deploy alertmanager:
 
-   .. code-block:: bash
+   .. prompt:: bash #
 
      ceph orch apply alertmanager 1
 
-#. Deploy prometheus.  A single prometheus instance is sufficient, but
-   for HA you may want to deploy two.
+#. Deploy Prometheus. A single Prometheus instance is sufficient, but
+   for high availablility (HA) you might want to deploy two:
 
-   .. code-block:: bash
+   .. prompt:: bash #
 
-     ceph orch apply prometheus 1    # or 2
+     ceph orch apply prometheus 1 
 
-#. Deploy grafana
+   or 
 
-   .. code-block:: bash
+   .. prompt:: bash #
+     
+     ceph orch apply prometheus 2    
+
+#. Deploy grafana:
+
+   .. prompt:: bash #
 
      ceph orch apply grafana 1
 
-Cephadm takes care of the configuration of Prometheus, Grafana, and Alertmanager
-automatically.
+Manually setting the Grafana URL
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-However, there is one exception to this rule. In a some setups, the Dashboard
-user's browser might not be able to access the Grafana URL configured in Ceph
-Dashboard. One such scenario is when the cluster and the accessing user are each
-in a different DNS zone.
+Cephadm automatically configures Prometheus, Grafana, and Alertmanager in
+all cases except one.
 
-For this case, there is an extra configuration option for Ceph Dashboard, which
-can be used to configure the URL for accessing Grafana by the user's browser.
-This value will never be altered by cephadm. To set this configuration option,
-issue the following command::
+In a some setups, the Dashboard user's browser might not be able to access the
+Grafana URL that is configured in Ceph Dashboard. This can happen when the
+cluster and the accessing user are in different DNS zones.
 
-  $ ceph dashboard set-grafana-frontend-api-url <grafana-server-api>
+If this is the case, you can use a configuration option for Ceph Dashboard
+to set the URL that the user's browser will use to access Grafana. This
+value will never be altered by cephadm. To set this configuration option,
+issue the following command:
 
-It may take a minute or two for services to be deployed.  Once
-completed, you should see something like this from ``ceph orch ls``
+   .. prompt:: bash $
+
+     ceph dashboard set-grafana-frontend-api-url <grafana-server-api>
+
+It might take a minute or two for services to be deployed. After the
+services have been deployed, you should see something like this when you issue the command ``ceph orch ls``:
 
 .. code-block:: console
 
@@ -108,33 +124,43 @@ completed, you should see something like this from ``ceph orch ls``
 Configuring SSL/TLS for Grafana
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``cephadm`` will deploy Grafana using the certificate defined in the ceph
-key/value store. If a certificate is not specified, ``cephadm`` will generate a
-self-signed certificate during deployment of the Grafana service.
+``cephadm`` deploys Grafana using the certificate defined in the ceph
+key/value store. If no certificate is specified, ``cephadm`` generates a
+self-signed certificate during the deployment of the Grafana service.
 
-A custom certificate can be configured using the following commands.
+A custom certificate can be configured using the following commands:
 
-.. code-block:: bash
+.. prompt:: bash #
 
   ceph config-key set mgr/cephadm/grafana_key -i $PWD/key.pem
   ceph config-key set mgr/cephadm/grafana_crt -i $PWD/certificate.pem
 
-The ``cephadm`` manager module needs to be restarted to be able to read updates
-to these keys.
+If you have already deployed Grafana, run ``reconfig`` on the service to
+update its configuration:
 
-.. code-block:: bash
+.. prompt:: bash #
 
-  ceph orch restart mgr
+  ceph orch reconfig grafana
 
-If you already deployed Grafana, you need to redeploy the service for the
-configuration to be updated.
+The ``reconfig`` command also sets the proper URL for Ceph Dashboard.
 
-.. code-block:: bash
+Networks and Ports
+~~~~~~~~~~~~~~~~~~
 
-  ceph orch redeploy grafana
+All monitoring services can have the network and port they bind to configured with a yaml service specification
 
-The ``redeploy`` command also takes care of setting the right URL for Ceph
-Dashboard.
+example spec file:
+
+.. code-block:: yaml
+
+    service_type: grafana
+    service_name: grafana
+    placement:
+      count: 1
+    networks:
+    - 192.169.142.0/24
+    spec:
+      port: 4200
 
 Using custom images
 ~~~~~~~~~~~~~~~~~~~
@@ -159,6 +185,17 @@ For example
 .. code-block:: bash
 
      ceph config set mgr mgr/cephadm/container_image_prometheus prom/prometheus:v1.4.1
+
+If there were already running monitoring stack daemon(s) of the type whose
+image you've changed, you must redeploy the daemon(s) in order to have them
+actually use the new image.
+
+For example, if you had changed the prometheus image
+
+.. prompt:: bash #
+
+     ceph orch redeploy prometheus
+
 
 .. note::
 
@@ -211,10 +248,10 @@ The following templates for files that will be generated by cephadm can be
 overridden. These are the names to be used when storing with ``ceph config-key
 set``:
 
-- ``alertmanager_alertmanager.yml``
-- ``grafana_ceph-dashboard.yml``
-- ``grafana_grafana.ini``
-- ``prometheus_prometheus.yml``
+- ``services/alertmanager/alertmanager.yml``
+- ``services/grafana/ceph-dashboard.yml``
+- ``services/grafana/grafana.ini``
+- ``services/prometheus/prometheus.yml``
 
 You can look up the file templates that are currently used by cephadm in
 ``src/pybind/mgr/cephadm/templates``:
@@ -244,9 +281,9 @@ To set contents of files as template use the ``-i`` argument:
   When using files as input to ``config-key`` an absolute path to the file must
   be used.
 
-It is required to restart the cephadm mgr module after a configuration option
-has been set. Then the configuration file for the service needs to be recreated.
-This is done using `redeploy`. For more details see the following example.
+
+Then the configuration file for the service needs to be recreated.
+This is done using `reconfig`. For more details see the following example.
 
 Example
 """""""
@@ -254,28 +291,24 @@ Example
 .. code-block:: bash
 
   # set the contents of ./prometheus.yml.j2 as template
-  ceph config-key set mgr/cephadm/services_prometheus_prometheus.yml \
+  ceph config-key set mgr/cephadm/services/prometheus/prometheus.yml \
     -i $PWD/prometheus.yml.j2
 
-  # restart cephadm mgr module
-  ceph orch restart mgr
-
-  # redeploy the prometheus service
-  ceph orch redeploy prometheus
+  # reconfig the prometheus service
+  ceph orch reconfig prometheus
 
 Disabling monitoring
 --------------------
 
-If you have deployed monitoring and would like to remove it, you can do
-so with
+To disable monitoring and remove the software that supports it, run the following commands:
 
-.. code-block:: bash
+.. code-block:: console
 
-  ceph orch rm grafana
-  ceph orch rm prometheus --force   # this will delete metrics data collected so far
-  ceph orch rm node-exporter
-  ceph orch rm alertmanager
-  ceph mgr module disable prometheus
+  $ ceph orch rm grafana
+  $ ceph orch rm prometheus --force   # this will delete metrics data collected so far
+  $ ceph orch rm node-exporter
+  $ ceph orch rm alertmanager
+  $ ceph mgr module disable prometheus
 
 
 Deploying monitoring manually

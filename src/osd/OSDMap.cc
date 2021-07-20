@@ -238,8 +238,8 @@ int OSDMap::Incremental::identify_osd(uuid_d u) const
   return -1;
 }
 
-int OSDMap::Incremental::propagate_snaps_to_tiers(CephContext *cct,
-						  const OSDMap& osdmap)
+int OSDMap::Incremental::propagate_base_properties_to_tiers(CephContext *cct,
+							    const OSDMap& osdmap)
 {
   ceph_assert(epoch == osdmap.get_epoch() + 1);
 
@@ -279,6 +279,8 @@ int OSDMap::Incremental::propagate_snaps_to_tiers(CephContext *cct,
 	if (new_rem_it != new_removed_snaps.end()) {
 	  new_removed_snaps[tier_pool] = new_rem_it->second;
 	}
+
+	tier->application_metadata = base.application_metadata;
       }
     }
   }
@@ -653,7 +655,6 @@ void OSDMap::Incremental::encode(ceph::buffer::list& bl, uint64_t features) cons
       target_v = 6;
     }
     if (change_stretch_mode) {
-      ceph_assert(target_v >= 9);
       target_v = std::max((uint8_t)10, target_v);
     }
     ENCODE_START(target_v, 1, bl); // extended, osd-only data
@@ -1611,9 +1612,7 @@ uint64_t OSDMap::get_features(int entity_type, uint64_t *pmask) const
 	pool.second.is_tier()) {
       features |= CEPH_FEATURE_OSD_CACHEPOOL;
     }
-    int ruleid = crush->find_rule(pool.second.get_crush_rule(),
-				  pool.second.get_type(),
-				  pool.second.get_size());
+    int ruleid = pool.second.get_crush_rule();
     if (ruleid >= 0) {
       if (crush->is_v2_rule(ruleid))
 	features |= CEPH_FEATURE_CRUSH_V2;
@@ -2441,7 +2440,7 @@ void OSDMap::_pg_to_raw_osds(
   unsigned size = pool.get_size();
 
   // what crush rule?
-  int ruleno = crush->find_rule(pool.get_crush_rule(), pool.get_type(), size);
+  int ruleno = pool.get_crush_rule();
   if (ruleno >= 0)
     crush->do_rule(ruleno, pps, *osds, size, osd_weight, pg.pool());
 
@@ -4147,21 +4146,8 @@ int OSDMap::validate_crush_rules(CrushWrapper *newcrush,
 	  << " but it is not present";
       return -EINVAL;
     }
-    if (newcrush->get_rule_mask_ruleset(ruleno) != ruleno) {
-      *ss << "rule " << ruleno << " mask ruleset does not match rule id";
-      return -EINVAL;
-    }
-    if (newcrush->get_rule_mask_type(ruleno) != (int)pool.get_type()) {
+    if (newcrush->get_rule_type(ruleno) != (int)pool.get_type()) {
       *ss << "pool " << i.first << " type does not match rule " << ruleno;
-      return -EINVAL;
-    }
-    int poolsize = pool.get_size();
-    if (poolsize < newcrush->get_rule_mask_min_size(ruleno) ||
-	poolsize > newcrush->get_rule_mask_max_size(ruleno)) {
-      *ss << "pool " << i.first << " size " << poolsize << " does not"
-	  << " fall within rule " << ruleno
-	  << " min_size " << newcrush->get_rule_mask_min_size(ruleno)
-	  << " and max_size " << newcrush->get_rule_mask_max_size(ruleno);
       return -EINVAL;
     }
   }
@@ -4220,7 +4206,7 @@ int OSDMap::build_simple_optioned(CephContext *cct, epoch_t e, uuid_d &fsid,
 
   int poolbase = get_max_osd() ? get_max_osd() : 1;
 
-  const int default_replicated_rule = crush->get_osd_pool_default_crush_replicated_ruleset(cct);
+  const int default_replicated_rule = crush->get_osd_pool_default_crush_replicated_rule(cct);
   ceph_assert(default_replicated_rule >= 0);
 
   if (default_pool) {
@@ -4411,7 +4397,7 @@ int OSDMap::build_simple_crush_rules(
   const string& root,
   ostream *ss)
 {
-  int crush_rule = crush.get_osd_pool_default_crush_replicated_ruleset(cct);
+  int crush_rule = crush.get_osd_pool_default_crush_replicated_rule(cct);
   string failure_domain =
     crush.get_type_name(cct->_conf->osd_crush_chooseleaf_type);
 
@@ -4598,8 +4584,7 @@ bool OSDMap::try_pg_upmap(
   const pg_pool_t *pool = get_pg_pool(pg.pool());
   if (!pool)
     return false;
-  int rule = crush->find_rule(pool->get_crush_rule(), pool->get_type(),
-			      pool->get_size());
+  int rule = pool->get_crush_rule();
   if (rule < 0)
     return false;
 
@@ -4664,9 +4649,7 @@ int OSDMap::calc_pg_upmaps(
     total_pgs += i.second.get_size() * i.second.get_pg_num();
 
     map<int,float> pmap;
-    int ruleno = tmp.crush->find_rule(i.second.get_crush_rule(),
-				      i.second.get_type(),
-				      i.second.get_size());
+    int ruleno = i.second.get_crush_rule();
     tmp.crush->get_rule_weight_osd_map(ruleno, &pmap);
     ldout(cct,20) << __func__ << " pool " << i.first
                   << " ruleno " << ruleno
@@ -5227,7 +5210,7 @@ protected:
   }
 
   void dump_item(const CrushTreeDumper::Item &qi, F *f) override {
-    if (!tree && qi.is_bucket())
+    if (!tree && (qi.is_bucket() || dumped_osds.count(qi.id)))
       return;
     if (!should_dump(qi.id))
       return;

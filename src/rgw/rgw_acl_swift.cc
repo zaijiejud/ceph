@@ -114,17 +114,17 @@ static boost::optional<ACLGrant> referrer_to_grant(std::string url_spec,
 
 static ACLGrant user_to_grant(const DoutPrefixProvider *dpp,
 			      CephContext* const cct,
-                              rgw::sal::RGWStore* store,
+                              rgw::sal::Store* store,
                               const std::string& uid,
                               const uint32_t perm)
 {
   RGWUserInfo grant_user;
   ACLGrant grant;
-  std::unique_ptr<rgw::sal::RGWUser> user;
+  std::unique_ptr<rgw::sal::User> user;
 
   user = store->get_user(rgw_user(uid));
-  if (user->load_by_id(dpp, null_yield) < 0) {
-    ldout(cct, 10) << "grant user does not exist: " << uid << dendl;
+  if (user->load_user(dpp, null_yield) < 0) {
+    ldpp_dout(dpp, 10) << "grant user does not exist: " << uid << dendl;
     /* skipping silently */
     grant.set_canon(user->get_id(), std::string(), perm);
   } else {
@@ -135,7 +135,7 @@ static ACLGrant user_to_grant(const DoutPrefixProvider *dpp,
 }
 
 int RGWAccessControlPolicy_SWIFT::add_grants(const DoutPrefixProvider *dpp,
-					     rgw::sal::RGWStore* store,
+					     rgw::sal::Store* store,
                                              const std::vector<std::string>& uids,
                                              const uint32_t perm)
 {
@@ -178,7 +178,7 @@ int RGWAccessControlPolicy_SWIFT::add_grants(const DoutPrefixProvider *dpp,
 
 
 int RGWAccessControlPolicy_SWIFT::create(const DoutPrefixProvider *dpp,
-					 rgw::sal::RGWStore* store,
+					 rgw::sal::Store* store,
                                          const rgw_user& id,
                                          const std::string& name,
                                          const char* read_list,
@@ -201,7 +201,7 @@ int RGWAccessControlPolicy_SWIFT::create(const DoutPrefixProvider *dpp,
 
     r = add_grants(dpp, store, uids, SWIFT_PERM_READ);
     if (r < 0) {
-      ldout(cct, 0) << "ERROR: add_grants for read returned r="
+      ldpp_dout(dpp, 0) << "ERROR: add_grants for read returned r="
                     << r << dendl;
       return r;
     }
@@ -218,7 +218,7 @@ int RGWAccessControlPolicy_SWIFT::create(const DoutPrefixProvider *dpp,
 
     r = add_grants(dpp, store, uids, SWIFT_PERM_WRITE);
     if (r < 0) {
-      ldout(cct, 0) << "ERROR: add_grants for write returned r="
+      ldpp_dout(dpp, 0) << "ERROR: add_grants for write returned r="
                     << r << dendl;
       return r;
     }
@@ -303,7 +303,7 @@ void RGWAccessControlPolicy_SWIFT::to_str(string& read, string& write)
 }
 
 void RGWAccessControlPolicy_SWIFTAcct::add_grants(const DoutPrefixProvider *dpp,
-						  rgw::sal::RGWStore* store,
+						  rgw::sal::Store* store,
                                                   const std::vector<std::string>& uids,
                                                   const uint32_t perm)
 {
@@ -314,10 +314,10 @@ void RGWAccessControlPolicy_SWIFTAcct::add_grants(const DoutPrefixProvider *dpp,
       grant.set_group(ACL_GROUP_ALL_USERS, perm);
       acl.add_grant(&grant);
     } else  {
-      std::unique_ptr<rgw::sal::RGWUser> user = store->get_user(rgw_user(uid));
+      std::unique_ptr<rgw::sal::User> user = store->get_user(rgw_user(uid));
 
-      if (user->load_by_id(dpp, null_yield) < 0) {
-        ldout(cct, 10) << "grant user does not exist:" << uid << dendl;
+      if (user->load_user(dpp, null_yield) < 0) {
+        ldpp_dout(dpp, 10) << "grant user does not exist:" << uid << dendl;
         /* skipping silently */
         grant.set_canon(user->get_id(), std::string(), perm);
         acl.add_grant(&grant);
@@ -330,7 +330,7 @@ void RGWAccessControlPolicy_SWIFTAcct::add_grants(const DoutPrefixProvider *dpp,
 }
 
 bool RGWAccessControlPolicy_SWIFTAcct::create(const DoutPrefixProvider *dpp,
-					      rgw::sal::RGWStore* store,
+					      rgw::sal::Store* store,
                                               const rgw_user& id,
                                               const std::string& name,
                                               const std::string& acl_str)
@@ -350,7 +350,7 @@ bool RGWAccessControlPolicy_SWIFTAcct::create(const DoutPrefixProvider *dpp,
   if (!iter.end() && (*iter)->is_array()) {
     std::vector<std::string> admin;
     decode_json_obj(admin, *iter);
-    ldout(cct, 0) << "admins: " << admin << dendl;
+    ldpp_dout(dpp, 0) << "admins: " << admin << dendl;
 
     add_grants(dpp, store, admin, SWIFT_PERM_ADMIN);
   }
@@ -359,7 +359,7 @@ bool RGWAccessControlPolicy_SWIFTAcct::create(const DoutPrefixProvider *dpp,
   if (!iter.end() && (*iter)->is_array()) {
     std::vector<std::string> readwrite;
     decode_json_obj(readwrite, *iter);
-    ldout(cct, 0) << "read-write: " << readwrite << dendl;
+    ldpp_dout(dpp, 0) << "read-write: " << readwrite << dendl;
 
     add_grants(dpp, store, readwrite, SWIFT_PERM_RWRT);
   }
@@ -368,7 +368,7 @@ bool RGWAccessControlPolicy_SWIFTAcct::create(const DoutPrefixProvider *dpp,
   if (!iter.end() && (*iter)->is_array()) {
     std::vector<std::string> readonly;
     decode_json_obj(readonly, *iter);
-    ldout(cct, 0) << "read-only: " << readonly << dendl;
+    ldpp_dout(dpp, 0) << "read-only: " << readonly << dendl;
 
     add_grants(dpp, store, readonly, SWIFT_PERM_READ);
   }

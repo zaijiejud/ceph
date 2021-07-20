@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
 
 import logging
 from functools import wraps
@@ -51,13 +50,21 @@ class HostManger(ResourceManager):
     def list(self) -> List[HostSpec]:
         return self.api.get_hosts()
 
+    @wait_api_result
+    def enter_maintenance(self, hostname: str, force: bool = False):
+        return self.api.enter_host_maintenance(hostname, force)
+
+    @wait_api_result
+    def exit_maintenance(self, hostname: str):
+        return self.api.exit_host_maintenance(hostname)
+
     def get(self, hostname: str) -> Optional[HostSpec]:
         hosts = [host for host in self.list() if host.hostname == hostname]
         return hosts[0] if hosts else None
 
     @wait_api_result
-    def add(self, hostname: str):
-        return self.api.add_host(HostSpec(hostname))
+    def add(self, hostname: str, addr: str, labels: List[str]):
+        return self.api.add_host(HostSpec(hostname, addr=addr, labels=labels))
 
     @wait_api_result
     def remove(self, hostname: str):
@@ -185,6 +192,8 @@ class OrchFeature(object):
     HOST_DELETE = 'remove_host'
     HOST_LABEL_ADD = 'add_host_label'
     HOST_LABEL_REMOVE = 'remove_host_label'
+    HOST_MAINTENANCE_ENTER = 'enter_host_maintenance'
+    HOST_MAINTENANCE_EXIT = 'exit_host_maintenance'
 
     SERVICE_LIST = 'describe_service'
     SERVICE_CREATE = 'apply'

@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
 
 from cherrypy import NotFound
 
@@ -12,10 +11,7 @@ from . import ApiController, ControllerDoc, Endpoint, EndpointDoc, \
 LIST_SCHEMA = {
     "rule_id": (int, 'Rule ID'),
     "rule_name": (str, 'Rule Name'),
-    "ruleset": (int, 'RuleSet related to the rule'),
     "type": (int, 'Type of Rule'),
-    "min_size": (int, 'Minimum size of Rule'),
-    "max_size": (int, 'Maximum size of Rule'),
     'steps': ([{str}], 'Steps included in the rule')
 }
 
@@ -25,9 +21,11 @@ LIST_SCHEMA = {
 class CrushRule(RESTController):
     @EndpointDoc("List Crush Rule Configuration",
                  responses={200: LIST_SCHEMA})
+    @RESTController.MethodMap(version='2.0')
     def list(self):
         return mgr.get('osd_map_crush')['rules']
 
+    @RESTController.MethodMap(version='2.0')
     def get(self, name):
         rules = mgr.get('osd_map_crush')['rules']
         for r in rules:
@@ -55,7 +53,11 @@ class CrushRuleUi(CrushRule):
     @ReadPermission
     def info(self):
         '''Used for crush rule creation modal'''
+        osd_map = mgr.get_osdmap()
+        crush = osd_map.get_crush()
+        crush.dump()
         return {
             'names': [r['rule_name'] for r in mgr.get('osd_map_crush')['rules']],
-            'nodes': mgr.get('osd_map_tree')['nodes']
+            'nodes': mgr.get('osd_map_tree')['nodes'],
+            'roots': crush.find_roots()
         }

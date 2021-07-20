@@ -97,7 +97,7 @@ RGWGetObj_Decompress::RGWGetObj_Decompress(CephContext* cct_,
 int RGWGetObj_Decompress::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_len)
 {
   ldout(cct, 10) << "Compression for rgw is enabled, decompress part "
-      << "bl_ofs="<< bl_ofs << bl_len << dendl;
+      << "bl_ofs="<< bl_ofs << ", bl_len=" << bl_len << dendl;
 
   if (!compressor.get()) {
     // if compressor isn't available - error, because cannot return decompressed data?
@@ -141,13 +141,13 @@ int RGWGetObj_Decompress::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_len
       return cr;
     }
     ++first_block;
-    while (out_bl.length() - q_ofs >= cct->_conf->rgw_max_chunk_size)
-    {
+    while (out_bl.length() - q_ofs >=
+	   static_cast<off_t>(cct->_conf->rgw_max_chunk_size)) {
       off_t ch_len = std::min<off_t>(cct->_conf->rgw_max_chunk_size, q_len);
       q_len -= ch_len;
       r = next->handle_data(out_bl, q_ofs, ch_len);
       if (r < 0) {
-        lderr(cct) << "handle_data failed with exit code " << r << dendl;
+        lsubdout(cct, rgw, 0) << "handle_data failed with exit code " << r << dendl;
         return r;
       }
       out_bl.splice(0, q_ofs + ch_len);
@@ -160,7 +160,7 @@ int RGWGetObj_Decompress::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_len
   if (ch_len > 0) {
     r = next->handle_data(out_bl, q_ofs, ch_len);
     if (r < 0) {
-      lderr(cct) << "handle_data failed with exit code " << r << dendl;
+      lsubdout(cct, rgw, 0) << "handle_data failed with exit code " << r << dendl;
       return r;
     }
     out_bl.splice(0, q_ofs + ch_len);

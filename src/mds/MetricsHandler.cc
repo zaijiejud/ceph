@@ -124,6 +124,9 @@ void MetricsHandler::remove_session(Session *session) {
   metrics.write_latency_metric = { };
   metrics.metadata_latency_metric = { };
   metrics.dentry_lease_metric = { };
+  metrics.opened_files_metric = { };
+  metrics.pinned_icaps_metric = { };
+  metrics.opened_inodes_metric = { };
   metrics.update_type = UPDATE_TYPE_REMOVE;
 }
 
@@ -144,7 +147,7 @@ void MetricsHandler::reset_seq() {
 }
 
 void MetricsHandler::handle_payload(Session *session, const CapInfoPayload &payload) {
-  dout(20) << ": type=" << static_cast<ClientMetricType>(CapInfoPayload::METRIC_TYPE)
+  dout(20) << ": type=" << payload.get_type()
 	   << ", session=" << session << ", hits=" << payload.cap_hits << ", misses="
 	   << payload.cap_misses << dendl;
 
@@ -160,7 +163,7 @@ void MetricsHandler::handle_payload(Session *session, const CapInfoPayload &payl
 }
 
 void MetricsHandler::handle_payload(Session *session, const ReadLatencyPayload &payload) {
-  dout(20) << ": type=" << static_cast<ClientMetricType>(ReadLatencyPayload::METRIC_TYPE)
+  dout(20) << ": type=" << payload.get_type()
 	   << ", session=" << session << ", latency=" << payload.lat << dendl;
 
   auto it = client_metrics_map.find(session->info.inst);
@@ -175,7 +178,7 @@ void MetricsHandler::handle_payload(Session *session, const ReadLatencyPayload &
 }
 
 void MetricsHandler::handle_payload(Session *session, const WriteLatencyPayload &payload) {
-  dout(20) << ": type=" << static_cast<ClientMetricType>(WriteLatencyPayload::METRIC_TYPE)
+  dout(20) << ": type=" << payload.get_type()
 	   << ", session=" << session << ", latency=" << payload.lat << dendl;
 
   auto it = client_metrics_map.find(session->info.inst);
@@ -190,8 +193,8 @@ void MetricsHandler::handle_payload(Session *session, const WriteLatencyPayload 
 }
 
 void MetricsHandler::handle_payload(Session *session, const MetadataLatencyPayload &payload) {
-  dout(20) << ": type=" << static_cast<ClientMetricType>(MetadataLatencyPayload::METRIC_TYPE)
-	   << ", session=" << session << ", latenc]y=" << payload.lat << dendl;
+  dout(20) << ": type=" << payload.get_type()
+	   << ", session=" << session << ", latency=" << payload.lat << dendl;
 
   auto it = client_metrics_map.find(session->info.inst);
   if (it == client_metrics_map.end()) {
@@ -205,7 +208,7 @@ void MetricsHandler::handle_payload(Session *session, const MetadataLatencyPaylo
 }
 
 void MetricsHandler::handle_payload(Session *session, const DentryLeasePayload &payload) {
-  dout(20) << ": type=" << static_cast<ClientMetricType>(DentryLeasePayload::METRIC_TYPE)
+  dout(20) << ": type=" << payload.get_type()
 	   << ", session=" << session << ", hits=" << payload.dlease_hits << ", misses="
 	   << payload.dlease_misses << dendl;
 
@@ -219,6 +222,57 @@ void MetricsHandler::handle_payload(Session *session, const DentryLeasePayload &
   metrics.dentry_lease_metric.hits = payload.dlease_hits;
   metrics.dentry_lease_metric.misses = payload.dlease_misses;
   metrics.dentry_lease_metric.updated = true;
+}
+
+void MetricsHandler::handle_payload(Session *session, const OpenedFilesPayload &payload) {
+  dout(20) << ": type=" << payload.get_type()
+           << ", session=" << session << ", opened_files=" << payload.opened_files
+           << ", total_inodes=" << payload.total_inodes << dendl;
+
+  auto it = client_metrics_map.find(session->info.inst);
+  if (it == client_metrics_map.end()) {
+    return;
+  }
+
+  auto &metrics = it->second.second;
+  metrics.update_type = UPDATE_TYPE_REFRESH;
+  metrics.opened_files_metric.opened_files = payload.opened_files;
+  metrics.opened_files_metric.total_inodes = payload.total_inodes;
+  metrics.opened_files_metric.updated = true;
+}
+
+void MetricsHandler::handle_payload(Session *session, const PinnedIcapsPayload &payload) {
+  dout(20) << ": type=" << payload.get_type()
+           << ", session=" << session << ", pinned_icaps=" << payload.pinned_icaps
+           << ", total_inodes=" << payload.total_inodes << dendl;
+
+  auto it = client_metrics_map.find(session->info.inst);
+  if (it == client_metrics_map.end()) {
+    return;
+  }
+
+  auto &metrics = it->second.second;
+  metrics.update_type = UPDATE_TYPE_REFRESH;
+  metrics.pinned_icaps_metric.pinned_icaps = payload.pinned_icaps;
+  metrics.pinned_icaps_metric.total_inodes = payload.total_inodes;
+  metrics.pinned_icaps_metric.updated = true;
+}
+
+void MetricsHandler::handle_payload(Session *session, const OpenedInodesPayload &payload) {
+  dout(20) << ": type=" << payload.get_type()
+           << ", session=" << session << ", opened_inodes=" << payload.opened_inodes
+           << ", total_inodes=" << payload.total_inodes << dendl;
+
+  auto it = client_metrics_map.find(session->info.inst);
+  if (it == client_metrics_map.end()) {
+    return;
+  }
+
+  auto &metrics = it->second.second;
+  metrics.update_type = UPDATE_TYPE_REFRESH;
+  metrics.opened_inodes_metric.opened_inodes = payload.opened_inodes;
+  metrics.opened_inodes_metric.total_inodes = payload.total_inodes;
+  metrics.opened_inodes_metric.updated = true;
 }
 
 void MetricsHandler::handle_payload(Session *session, const UnknownPayload &payload) {

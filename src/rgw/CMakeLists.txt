@@ -1,15 +1,3 @@
-if(Boost_VERSION VERSION_GREATER_EQUAL 1.74)
-  add_definitions(-DBOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
-endif()
-
-add_custom_target(civetweb_h
-  COMMAND ${CMAKE_COMMAND} -E make_directory
-  "${CMAKE_BINARY_DIR}/src/include/civetweb"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  "${CMAKE_SOURCE_DIR}/src/civetweb/include/civetweb.h"
-  "${CMAKE_BINARY_DIR}/src/include/civetweb"
-  COMMENT "keep civetweb.h up-to-date")
-
 find_program(GPERF gperf)
 if(NOT GPERF)
   message(FATAL_ERROR "Can't find gperf")
@@ -66,6 +54,7 @@ set(librgw_common_srcs
   rgw_bucket_layout.cc
   rgw_bucket_sync.cc
   rgw_cache.cc
+  rgw_d3n_datacache.cc
   rgw_common.cc
   rgw_compression.cc
   rgw_etag_verifier.cc
@@ -141,6 +130,7 @@ set(librgw_common_srcs
   rgw_tag.cc
   rgw_tag_s3.cc
   rgw_tools.cc
+  rgw_log_backing.cc
   rgw_user.cc
   rgw_website.cc
   rgw_xml.cc
@@ -160,7 +150,7 @@ set(librgw_common_srcs
   rgw_kms.cc
   rgw_kmip_client.cc
   rgw_url.cc
-  rgw_oidc_provider
+  rgw_oidc_provider.cc
   rgw_datalog.cc
   cls_fifo_legacy.cc
   rgw_lua_utils.cc
@@ -243,15 +233,9 @@ set_source_files_properties(rgw_iam_policy.cc PROPERTIES
   COMPILE_FLAGS -I${CMAKE_BINARY_DIR}/src/rgw)
 
 
-if (WITH_RADOSGW_FCGI_FRONTEND)
-  list(APPEND rgw_a_srcs rgw_fcgi.cc)
-endif()
-
 add_library(rgw_a STATIC
     ${rgw_a_srcs}
     $<TARGET_OBJECTS:rgw_common>)
-
-add_dependencies(rgw_a civetweb_h)
 
 target_compile_definitions(rgw_a PUBLIC "-DCLS_CLIENT_HIDE_IOCTX")
 target_include_directories(rgw_a PUBLIC "${CMAKE_SOURCE_DIR}/src/dmclock/support/src")
@@ -303,33 +287,19 @@ endif()
 
 set(rgw_schedulers_srcs
   rgw_dmclock_scheduler_ctx.cc
-  rgw_dmclock_sync_scheduler.cc)
+  rgw_dmclock_sync_scheduler.cc
+  rgw_dmclock_async_scheduler.cc)
 set(radosgw_srcs
   rgw_loadgen_process.cc
-  rgw_civetweb.cc
-  rgw_civetweb_frontend.cc
-  rgw_civetweb_log.cc)
-if (WITH_RADOSGW_FCGI_FRONTEND)
-  list(APPEND radosgw_srcs rgw_fcgi_process.cc)
-endif()
-
-if(WITH_RADOSGW_BEAST_FRONTEND)
-  list(APPEND radosgw_srcs
-    rgw_asio_client.cc
-    rgw_asio_frontend.cc)
-  list(APPEND rgw_schedulers_srcs
-    rgw_dmclock_async_scheduler.cc)
-endif()
+  rgw_asio_client.cc
+  rgw_asio_frontend.cc)
 
 add_library(rgw_schedulers STATIC ${rgw_schedulers_srcs})
 target_link_libraries(rgw_schedulers
-  PUBLIC dmclock::dmclock)
+  PUBLIC dmclock::dmclock spawn)
 
 add_library(radosgw SHARED ${radosgw_srcs} ${rgw_a_srcs} rgw_main.cc
-  $<TARGET_OBJECTS:rgw_kmip>
-  $<TARGET_OBJECTS:civetweb_common_objs>)
-
-add_dependencies(radosgw civetweb_h)
+  $<TARGET_OBJECTS:rgw_kmip>)
 
 target_compile_definitions(radosgw PUBLIC "-DCLS_CLIENT_HIDE_IOCTX")
 target_include_directories(radosgw PUBLIC "${CMAKE_SOURCE_DIR}/src/dmclock/support/src")
@@ -339,12 +309,9 @@ target_link_libraries(radosgw
   PRIVATE ${rgw_libs} rgw_schedulers kmip
   PUBLIC dmclock::dmclock
 )
-if(WITH_RADOSGW_BEAST_FRONTEND)
-  target_link_libraries(rgw_schedulers PUBLIC spawn)
-  if(WITH_RADOSGW_BEAST_OPENSSL)
-    # used by rgw_asio_frontend.cc
-    target_link_libraries(radosgw PRIVATE OpenSSL::SSL)
-  endif()
+if(WITH_RADOSGW_BEAST_OPENSSL)
+  # used by rgw_asio_frontend.cc
+  target_link_libraries(radosgw PRIVATE OpenSSL::SSL)
 endif()
 set_target_properties(radosgw PROPERTIES OUTPUT_NAME radosgw VERSION 2.0.0
   SOVERSION 2)
@@ -356,7 +323,7 @@ target_link_libraries(radosgwd radosgw librados
   cls_log_client cls_timeindex_client neorados_cls_fifo
   cls_version_client cls_user_client
   global
-  ${FCGI_LIBRARY} ${LIB_RESOLV}
+  ${LIB_RESOLV}
   ${CURL_LIBRARIES} ${EXPAT_LIBRARIES} ${BLKID_LIBRARIES}
   ${ALLOC_LIBS})
 set_target_properties(radosgwd PROPERTIES OUTPUT_NAME radosgw)
@@ -371,7 +338,7 @@ target_link_libraries(radosgw-admin ${rgw_libs} librados
   cls_rgw_client cls_otp_client cls_lock_client cls_refcount_client
   cls_log_client cls_timeindex_client neorados_cls_fifo
   cls_version_client cls_user_client
-  global ${FCGI_LIBRARY} ${LIB_RESOLV}
+  global ${LIB_RESOLV}
   ${CURL_LIBRARIES} ${EXPAT_LIBRARIES} ${BLKID_LIBRARIES})
 install(TARGETS radosgw-admin DESTINATION bin)
 
@@ -382,7 +349,7 @@ target_link_libraries(radosgw-es ${rgw_libs} librados
   cls_rgw_client cls_otp_client cls_lock_client cls_refcount_client
   cls_log_client cls_timeindex_client neorados_cls_fifo
   cls_version_client cls_user_client
-  global ${FCGI_LIBRARY} ${LIB_RESOLV}
+  global ${LIB_RESOLV}
   ${CURL_LIBRARIES} ${EXPAT_LIBRARIES} ${BLKID_LIBRARIES})
 install(TARGETS radosgw-es DESTINATION bin)
 
@@ -400,7 +367,7 @@ target_link_libraries(radosgw-object-expirer ${rgw_libs} librados
   cls_rgw_client cls_otp_client cls_lock_client cls_refcount_client
   cls_log_client cls_timeindex_client neorados_cls_fifo
   cls_version_client cls_user_client
-  global ${FCGI_LIBRARY} ${LIB_RESOLV}
+  global ${LIB_RESOLV}
   ${CURL_LIBRARIES} ${EXPAT_LIBRARIES})
 install(TARGETS radosgw-object-expirer DESTINATION bin)
 

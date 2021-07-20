@@ -1,6 +1,7 @@
 import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ReactiveFormsModule } from '@angular/forms';
+import { By } from '@angular/platform-browser';
 import { RouterTestingModule } from '@angular/router/testing';
 
 import { NgbTypeaheadModule } from '@ng-bootstrap/ng-bootstrap';
@@ -199,7 +200,6 @@ describe('ServiceFormComponent', () => {
           unmanaged: false,
           rgw_frontend_port: 1234,
           rgw_frontend_ssl_certificate: '',
-          rgw_frontend_ssl_key: '',
           ssl: true
         });
       });
@@ -243,6 +243,13 @@ describe('ServiceFormComponent', () => {
           unmanaged: false,
           ssl: false
         });
+      });
+
+      it('should not show private key field', () => {
+        formHelper.setValue('ssl', true);
+        fixture.detectChanges();
+        const ssl_key = fixture.debugElement.query(By.css('#ssl_key'));
+        expect(ssl_key).toBeNull();
       });
     });
 
@@ -329,6 +336,74 @@ describe('ServiceFormComponent', () => {
         formHelper.setValue('api_port', 'abc');
         component.onSubmit();
         formHelper.expectError('api_port', 'pattern');
+      });
+    });
+
+    describe('should test service ingress', () => {
+      beforeEach(() => {
+        formHelper.setValue('service_type', 'ingress');
+        formHelper.setValue('backend_service', 'rgw.foo');
+        formHelper.setValue('virtual_ip', '192.168.20.1/24');
+        formHelper.setValue('ssl', false);
+      });
+
+      it('should submit ingress', () => {
+        component.onSubmit();
+        expect(cephServiceService.create).toHaveBeenCalledWith({
+          service_type: 'ingress',
+          placement: {},
+          unmanaged: false,
+          backend_service: 'rgw.foo',
+          service_id: 'rgw.foo',
+          virtual_ip: '192.168.20.1/24',
+          virtual_interface_networks: null,
+          ssl: false
+        });
+      });
+
+      it('should pre-populate the service id', () => {
+        component.prePopulateId();
+        const prePopulatedID = component.serviceForm.getValue('service_id');
+        expect(prePopulatedID).toBe('rgw.foo');
+      });
+
+      it('should submit valid frontend and monitor port', () => {
+        // min value
+        formHelper.setValue('frontend_port', 1);
+        formHelper.setValue('monitor_port', 1);
+        component.onSubmit();
+        formHelper.expectValid('frontend_port');
+        formHelper.expectValid('monitor_port');
+
+        // max value
+        formHelper.setValue('frontend_port', 65535);
+        formHelper.setValue('monitor_port', 65535);
+        component.onSubmit();
+        formHelper.expectValid('frontend_port');
+        formHelper.expectValid('monitor_port');
+      });
+
+      it('should submit invalid frontend and monitor port', () => {
+        // min
+        formHelper.setValue('frontend_port', 0);
+        formHelper.setValue('monitor_port', 0);
+        component.onSubmit();
+        formHelper.expectError('frontend_port', 'min');
+        formHelper.expectError('monitor_port', 'min');
+
+        // max
+        formHelper.setValue('frontend_port', 65536);
+        formHelper.setValue('monitor_port', 65536);
+        component.onSubmit();
+        formHelper.expectError('frontend_port', 'max');
+        formHelper.expectError('monitor_port', 'max');
+
+        // pattern
+        formHelper.setValue('frontend_port', 'abc');
+        formHelper.setValue('monitor_port', 'abc');
+        component.onSubmit();
+        formHelper.expectError('frontend_port', 'pattern');
+        formHelper.expectError('monitor_port', 'pattern');
       });
     });
   });

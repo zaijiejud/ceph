@@ -58,6 +58,7 @@ private:
   PMEMobjpool *m_log_pool = nullptr;
   Builder<This> *m_builderobj;
   const char* m_pwl_pool_layout_name;
+  const uint64_t MAX_EXTENT_SIZE = 1048576;
 
   Builder<This>* create_builder();
   void remove_pool_file();
@@ -81,7 +82,7 @@ protected:
   using AbstractWriteLog<ImageCtxT>::m_first_valid_entry;
 
   void process_work() override;
-  void schedule_append_ops(pwl::GenericLogOperations &ops) override;
+  void schedule_append_ops(pwl::GenericLogOperations &ops, C_BlockIORequestT *req) override;
   void append_scheduled_ops(void) override;
   void reserve_cache(C_BlockIORequestT *req,
                      bool &alloc_succeeds, bool &no_space) override;
@@ -102,10 +103,13 @@ protected:
       C_BlockIORequestT *req) override;
   Context *construct_flush_entry_ctx(
         const std::shared_ptr<pwl::GenericLogEntry> log_entry) override;
-  void initialize_pool(Context *on_finish, pwl::DeferredContexts &later) override;
+  bool initialize_pool(Context *on_finish, pwl::DeferredContexts &later) override;
   void write_data_to_buffer(
       std::shared_ptr<pwl::WriteLogEntry> ws_entry,
       pwl::WriteLogCacheEntry *pmem_entry) override;
+  uint64_t get_max_extent() override {
+    return MAX_EXTENT_SIZE;
+  }
 };
 
 } // namespace rwl

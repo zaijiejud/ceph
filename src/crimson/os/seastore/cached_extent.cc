@@ -7,7 +7,7 @@
 
 namespace {
   [[maybe_unused]] seastar::logger& logger() {
-    return crimson::get_logger(ceph_subsys_filestore);
+    return crimson::get_logger(ceph_subsys_seastore);
   }
 }
 
@@ -86,7 +86,7 @@ std::ostream &operator<<(std::ostream &out, const lba_pin_list_t &rhs)
 {
   bool first = true;
   out << '[';
-  for (auto &i: rhs) {
+  for (const auto &i: rhs) {
     out << (first ? "" : ",") << *i;
     first = false;
   }

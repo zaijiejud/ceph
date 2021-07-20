@@ -600,7 +600,7 @@ Options
 
 .. option:: --max-entries=<entries>
 
-	Optional for listing operations to specify the max entires
+	Optional for listing operations to specify the max entries.
 
 .. option:: --purge-data
 
@@ -1013,7 +1013,7 @@ Availability
 
 :program:`radosgw-admin` is part of Ceph, a massively scalable, open-source,
 distributed storage system.  Please refer to the Ceph documentation at
-http://ceph.com/docs for more information.
+https://docs.ceph.com for more information.
 
 
 See also

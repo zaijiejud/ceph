@@ -26,6 +26,7 @@ import { OrdinalPipe } from './ordinal.pipe';
 import { RbdConfigurationSourcePipe } from './rbd-configuration-source.pipe';
 import { RelativeDatePipe } from './relative-date.pipe';
 import { RoundPipe } from './round.pipe';
+import { SanitizeHtmlPipe } from './sanitize-html.pipe';
 import { TruncatePipe } from './truncate.pipe';
 import { UpperFirstPipe } from './upper-first.pipe';
 
@@ -58,7 +59,8 @@ import { UpperFirstPipe } from './upper-first.pipe';
     RbdConfigurationSourcePipe,
     DurationPipe,
     MapPipe,
-    TruncatePipe
+    TruncatePipe,
+    SanitizeHtmlPipe
   ],
   exports: [
     ArrayPipe,
@@ -87,7 +89,8 @@ import { UpperFirstPipe } from './upper-first.pipe';
     RbdConfigurationSourcePipe,
     DurationPipe,
     MapPipe,
-    TruncatePipe
+    TruncatePipe,
+    SanitizeHtmlPipe
   ],
   providers: [
     ArrayPipe,
@@ -111,8 +114,10 @@ import { UpperFirstPipe } from './upper-first.pipe';
     MillisecondsPipe,
     NotAvailablePipe,
     UpperFirstPipe,
+    DurationPipe,
     MapPipe,
-    TruncatePipe
+    TruncatePipe,
+    SanitizeHtmlPipe
   ]
 })
 export class PipesModule {}

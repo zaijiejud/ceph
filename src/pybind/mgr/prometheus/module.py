@@ -5,7 +5,6 @@ import json
 import math
 import os
 import re
-import socket
 import threading
 import time
 from mgr_module import CLIReadCommand, MgrModule, MgrStandbyModule, PG_STATES, Option, ServiceInfoT
@@ -13,7 +12,7 @@ from mgr_util import get_default_addr, profile_method
 from rbd import RBD
 from collections import namedtuple
 try:
-    from typing import DefaultDict, Optional, Dict, Any, List, Set, Tuple, Union, cast
+    from typing import DefaultDict, Optional, Dict, Any, Set, cast, Tuple, Union, List
 except ImportError:
     pass
 
@@ -68,7 +67,7 @@ DF_CLUSTER = ['total_bytes', 'total_used_bytes', 'total_used_raw_bytes']
 
 DF_POOL = ['max_avail', 'stored', 'stored_raw', 'objects', 'dirty',
            'quota_bytes', 'quota_objects', 'rd', 'rd_bytes', 'wr', 'wr_bytes',
-           'compress_bytes_used', 'compress_under_bytes']
+           'compress_bytes_used', 'compress_under_bytes', 'bytes_used', 'percent_used']
 
 OSD_POOL_STATS = ('recovering_objects_per_sec', 'recovering_bytes_per_sec',
                   'recovering_keys_per_sec', 'num_objects_recovered',
@@ -101,7 +100,7 @@ OSD_STATUS = ['weight', 'up', 'in']
 
 OSD_STATS = ['apply_latency_ms', 'commit_latency_ms']
 
-POOL_METADATA = ('pool_id', 'name')
+POOL_METADATA = ('pool_id', 'name', 'type', 'description', 'compression_mode')
 
 RGW_METADATA = ('ceph_daemon', 'hostname', 'ceph_version')
 
@@ -125,7 +124,8 @@ class Metric(object):
         self.name = name
         self.desc = desc
         self.labelnames = labels    # tuple if present
-        self.value: Dict[Tuple[str, ...], Union[float, int]] = {}             # indexed by label values
+        self.value: Dict[Tuple[str, ...], Union[float, int]
+                         ] = {}             # indexed by label values
 
     def clear(self) -> None:
         self.value = {}
@@ -187,6 +187,31 @@ class Metric(object):
         return expfmt
 
 
+class MetricCounter(Metric):
+    def __init__(self,
+                 name: str,
+                 desc: str,
+                 labels: Optional[Tuple[str, ...]] = None) -> None:
+        super(MetricCounter, self).__init__('counter', name, desc, labels)
+        self.value = defaultdict(lambda: 0)
+
+    def clear(self) -> None:
+        pass  # Skip calls to clear as we want to keep the counters here.
+
+    def set(self,
+            value: Union[float, int],
+            labelvalues: Optional[Tuple[str, ...]] = None) -> None:
+        msg = 'This method must not be used for instances of MetricCounter class'
+        raise NotImplementedError(msg)
+
+    def add(self,
+            value: Union[float, int],
+            labelvalues: Optional[Tuple[str, ...]] = None) -> None:
+        # labelvalues must be a tuple
+        labelvalues = labelvalues or ('',)
+        self.value[labelvalues] += value
+
+
 class MetricCollectionThread(threading.Thread):
     def __init__(self, module: 'Module') -> None:
         self.mod = module
@@ -243,11 +268,15 @@ class MetricCollectionThread(threading.Thread):
 class Module(MgrModule):
     MODULE_OPTIONS = [
         Option(
-            'server_addr'
+            'server_addr',
+            default=get_default_addr(),
+            desc='the IPv4 or IPv6 address on which the module listens for HTTP requests',
         ),
         Option(
             'server_port',
-            type='int'
+            type='int',
+            default=DEFAULT_PORT,
+            desc='the port on which the module listens for HTTP requests'
         ),
         Option(
             'scrape_interval',
@@ -753,6 +782,8 @@ class Module(MgrModule):
                 ))
 
             osd_dev_node = None
+            osd_wal_dev_node = ''
+            osd_db_dev_node = ''
             if obj_store == "filestore":
                 # collect filestore backend device
                 osd_dev_node = osd_metadata.get(
@@ -793,9 +824,42 @@ class Module(MgrModule):
                 self.log.info("Missing dev node metadata for osd {0}, skipping "
                               "occupation record for this osd".format(id_))
 
+        ec_profiles = osd_map.get('erasure_code_profiles', {})
+
+        def _get_pool_info(pool: Dict[str, Any]) -> Tuple[str, str]:
+            pool_type = 'unknown'
+            description = 'unknown'
+
+            if pool['type'] == 1:
+                pool_type = "replicated"
+                description = f"replica:{pool['size']}"
+            elif pool['type'] == 3:
+                pool_type = "erasure"
+                name = pool.get('erasure_code_profile', '')
+                profile = ec_profiles.get(name, {})
+                if profile:
+                    description = f"ec:{profile['k']}+{profile['m']}"
+                else:
+                    description = "ec:unknown"
+
+            return pool_type, description
+
         for pool in osd_map['pools']:
+
+            compression_mode = 'none'
+            pool_type, pool_description = _get_pool_info(pool)
+
+            if 'options' in pool:
+                compression_mode = pool['options'].get('compression_mode', 'none')
+
             self.metrics['pool_metadata'].set(
-                1, (pool['pool'], pool['pool_name']))
+                1, (
+                    pool['pool'],
+                    pool['pool_name'],
+                    pool_type,
+                    pool_description,
+                    compression_mode)
+            )
 
         # Populate other servers metadata
         for key, value in servers.items():
@@ -1101,6 +1165,33 @@ class Module(MgrModule):
 
         self.metrics.update(new_metrics)
 
+    def get_collect_time_metrics(self) -> None:
+        sum_metric = self.metrics.get('prometheus_collect_duration_seconds_sum')
+        count_metric = self.metrics.get('prometheus_collect_duration_seconds_count')
+        if sum_metric is None:
+            sum_metric = MetricCounter(
+                'prometheus_collect_duration_seconds_sum',
+                'The sum of seconds took to collect all metrics of this exporter',
+                ('method',))
+            self.metrics['prometheus_collect_duration_seconds_sum'] = sum_metric
+        if count_metric is None:
+            count_metric = MetricCounter(
+                'prometheus_collect_duration_seconds_count',
+                'The amount of metrics gathered for this exporter',
+                ('method',))
+            self.metrics['prometheus_collect_duration_seconds_sum'] = count_metric
+
+        # Collect all timing data and make it available as metric, excluding the
+        # `collect` method because it has not finished at this point and hence
+        # there's no `_execution_duration` attribute to be found. The
+        # `_execution_duration` attribute is added by the `profile_method`
+        # decorator.
+        for method_name, method in Module.__dict__.items():
+            duration = getattr(method, '_execution_duration', None)
+            if duration is not None:
+                cast(MetricCounter, sum_metric).add(duration, (method_name,))
+                cast(MetricCounter, count_metric).add(1, (method_name,))
+
     @profile_method(True)
     def collect(self) -> str:
         # Clear the metrics before scraping
@@ -1166,6 +1257,8 @@ class Module(MgrModule):
 
         self.add_fixed_name_metrics()
         self.get_rbd_stats()
+
+        self.get_collect_time_metrics()
 
         # Return formatted metrics and clear no longer used data
         _metrics = [m.str_expfmt() for m in self.metrics.values()]
@@ -1289,10 +1382,9 @@ class Module(MgrModule):
 
         # Publish the URI that others may use to access the service we're
         # about to start serving
-        self.set_uri('http://{0}:{1}/'.format(
-            socket.getfqdn() if server_addr in ['::', '0.0.0.0'] else server_addr,
-            server_port
-        ))
+        if server_addr in ['::', '0.0.0.0']:
+            server_addr = self.get_mgr_ip()
+        self.set_uri('http://{0}:{1}/'.format(server_addr, server_port))
 
         cherrypy.config.update({
             'server.socket_host': server_addr,

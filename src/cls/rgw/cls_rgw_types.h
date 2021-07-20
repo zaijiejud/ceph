@@ -1,8 +1,7 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 
-#ifndef CEPH_CLS_RGW_TYPES_H
-#define CEPH_CLS_RGW_TYPES_H
+#pragma once
 
 #include <boost/container/flat_map.hpp>
 #include "common/ceph_time.h"
@@ -1174,7 +1173,7 @@ struct cls_rgw_gc_obj_info
     ls.push_back(new cls_rgw_gc_obj_info);
     ls.push_back(new cls_rgw_gc_obj_info);
     ls.back()->tag = "footag";
-    ceph_timespec ts{init_le32(21), init_le32(32)};
+    ceph_timespec ts{ceph_le32(21), ceph_le32(32)};
     ls.back()->time = ceph::real_clock::from_ceph_timespec(ts);
   }
 };
@@ -1283,5 +1282,3 @@ struct cls_rgw_reshard_entry
   void get_key(std::string *key) const;
 };
 WRITE_CLASS_ENCODER(cls_rgw_reshard_entry)
-
-#endif

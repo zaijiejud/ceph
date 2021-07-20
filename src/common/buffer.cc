@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -7,9 +7,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 
 #include <atomic>
@@ -33,8 +33,8 @@
 #include "common/likely.h"
 #include "common/valgrind.h"
 #include "common/deleter.h"
-#include "common/RWLock.h"
 #include "common/error_code.h"
+#include "include/intarith.h"
 #include "include/spinlock.h"
 #include "include/scope_guard.h"
 
@@ -47,6 +47,10 @@ using namespace ceph;
 
 #define CEPH_BUFFER_ALLOC_UNIT  4096u
 #define CEPH_BUFFER_APPEND_SIZE (CEPH_BUFFER_ALLOC_UNIT - sizeof(raw_combined))
+
+// 256K is the maximum "small" object size in tcmalloc above which allocations come from
+// the central heap.  For now let's keep this below that threshold.
+#define CEPH_BUFFER_ALLOC_UNIT_MAX std::size_t { 256*1024 }
 
 #ifdef BUFFER_DEBUG
 static ceph::spinlock debug_lock;
@@ -99,8 +103,8 @@ static ceph::spinlock debug_lock;
 	   unsigned align,
 	   int mempool = mempool::mempool_buffer_anon)
     {
-      if (!align)
-	align = sizeof(size_t);
+      // posix_memalign() requires a multiple of sizeof(void *)
+      align = std::max<unsigned>(align, sizeof(void *));
       size_t rawlen = round_up_to(sizeof(buffer::raw_combined),
 				  alignof(buffer::raw_combined));
       size_t datalen = round_up_to(len, alignof(buffer::raw_combined));
@@ -161,8 +165,8 @@ static ceph::spinlock debug_lock;
     MEMPOOL_CLASS_HELPERS();
 
     raw_posix_aligned(unsigned l, unsigned _align) : raw(l) {
-      align = _align;
-      ceph_assert((align >= sizeof(void *)) && (align & (align - 1)) == 0);
+      // posix_memalign() requires a multiple of sizeof(void *)
+      align = std::max<unsigned>(_align, sizeof(void *));
 #ifdef DARWIN
       data = (char *) valloc(len);
 #else
@@ -1254,8 +1258,12 @@ static ceph::spinlock debug_lock;
             buffer::create_aligned(unaligned._len, align_memory)));
         had_to_rebuild = true;
       }
-      _buffers.insert_after(p_prev, *ptr_node::create(unaligned._buffers.front()).release());
-      _num += 1;
+      if (unaligned.get_num_buffers()) {
+        _buffers.insert_after(p_prev, *ptr_node::create(unaligned._buffers.front()).release());
+        _num += 1;
+      } else {
+        // a bufferlist containing only 0-length bptrs is rebuilt as empty
+      }
       ++p_prev;
     }
     return had_to_rebuild;
@@ -1315,8 +1323,14 @@ static ceph::spinlock debug_lock;
     // make a new buffer.  fill out a complete page, factoring in the
     // raw_combined overhead.
     size_t need = round_up_to(len, sizeof(size_t)) + sizeof(raw_combined);
-    size_t alen = round_up_to(need, CEPH_BUFFER_ALLOC_UNIT) -
-      sizeof(raw_combined);
+    size_t alen = round_up_to(need, CEPH_BUFFER_ALLOC_UNIT);
+    if (_carriage == &_buffers.back()) {
+      size_t nlen = round_up_to(_carriage->raw_length(), CEPH_BUFFER_ALLOC_UNIT) * 2;
+      nlen = std::min(nlen, CEPH_BUFFER_ALLOC_UNIT_MAX);
+      alen = std::max(alen, nlen);
+    }
+    alen -= sizeof(raw_combined);
+
     auto new_back = \
       ptr_node::create(raw_combined::create(alen, 0, get_mempool()));
     new_back->set_length(0);   // unused, so far.
@@ -1509,16 +1523,18 @@ static ceph::spinlock debug_lock;
    */
   char *buffer::list::c_str()
   {
-    if (_buffers.empty())
-      return 0;                         // no buffers
-
-    auto iter = std::cbegin(_buffers);
-    ++iter;
-
-    if (iter != std::cend(_buffers)) {
+    switch (get_num_buffers()) {
+    case 0:
+      // no buffers
+      return nullptr;
+    case 1:
+      // good, we're already contiguous.
+      break;
+    default:
       rebuild();
+      break;
     }
-    return _buffers.front().c_str();  // good, we're already contiguous.
+    return _buffers.front().c_str();
   }
 
   string buffer::list::to_str() const {
@@ -2267,8 +2283,10 @@ MEMPOOL_DEFINE_OBJECT_FACTORY(buffer::raw_static, buffer_raw_static,
 
 
 void ceph::buffer::list::page_aligned_appender::_refill(size_t len) {
-  const size_t alloc = \
-    std::max((size_t)min_alloc, (len + CEPH_PAGE_SIZE - 1) & CEPH_PAGE_MASK);
+  const unsigned alloc =
+    std::max(min_alloc,
+	     shift_round_up(static_cast<unsigned>(len),
+			    static_cast<unsigned>(CEPH_PAGE_SHIFT)));
   auto new_back = \
     ptr_node::create(buffer::create_page_aligned(alloc));
   new_back->set_length(0);   // unused, so far.

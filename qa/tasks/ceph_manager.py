@@ -3,6 +3,7 @@ ceph manager -- Thrasher and CephManager objects
 """
 from functools import wraps
 import contextlib
+import errno
 import random
 import signal
 import time
@@ -49,6 +50,20 @@ def shell(ctx, cluster_name, remote, args, name=None, **kwargs):
         ] + args,
         **kwargs
     )
+
+# this is for rook clusters
+def toolbox(ctx, cluster_name, args, **kwargs):
+    return ctx.rook[cluster_name].remote.run(
+        args=[
+            'kubectl',
+            '-n', 'rook-ceph',
+            'exec',
+            ctx.rook[cluster_name].toolbox,
+            '--',
+        ] + args,
+        **kwargs
+    )
+
 
 def write_conf(ctx, conf_path=DEFAULT_CONF_PATH, cluster='ceph'):
     conf_fp = BytesIO()
@@ -267,7 +282,7 @@ class OSDThrasher(Thrasher):
         self.logger.info(msg, *args, **kwargs)
 
     def cmd_exists_on_osds(self, cmd):
-        if self.ceph_manager.cephadm:
+        if self.ceph_manager.cephadm or self.ceph_manager.rook:
             return True
         allremotes = self.ceph_manager.ctx.cluster.only(\
             teuthology.is_type('osd', self.cluster)).remotes.keys()
@@ -289,9 +304,29 @@ class OSDThrasher(Thrasher):
                 wait=True, check_status=False,
                 stdout=StringIO(),
                 stderr=StringIO())
+        elif self.ceph_manager.rook:
+            assert False, 'not implemented'
         else:
             return remote.run(
                 args=['sudo', 'adjust-ulimits', 'ceph-objectstore-tool', '--err-to-stderr'] + cmd,
+                wait=True, check_status=False,
+                stdout=StringIO(),
+                stderr=StringIO())
+
+    def run_ceph_bluestore_tool(self, remote, osd, cmd):
+        if self.ceph_manager.cephadm:
+            return shell(
+                self.ceph_manager.ctx, self.ceph_manager.cluster, remote,
+                args=['ceph-bluestore-tool', '--err-to-stderr'] + cmd,
+                name=osd,
+                wait=True, check_status=False,
+                stdout=StringIO(),
+                stderr=StringIO())
+        elif self.ceph_manager.rook:
+            assert False, 'not implemented'
+        else:
+            return remote.run(
+                args=['sudo', 'ceph-bluestore-tool', '--err-to-stderr'] + cmd,
                 wait=True, check_status=False,
                 stdout=StringIO(),
                 stderr=StringIO())
@@ -331,6 +366,9 @@ class OSDThrasher(Thrasher):
                 '--no-mon-config',
                 '--log-file=/var/log/ceph/objectstore_tool.$pid.log',
             ]
+
+            if self.ceph_manager.rook:
+                assert False, 'not implemented'
 
             if not self.ceph_manager.cephadm:
                 # ceph-objectstore-tool might be temporarily absent during an
@@ -1010,6 +1048,113 @@ class OSDThrasher(Thrasher):
             self.ceph_manager.osd_admin_socket(i, command=['injectfull', 'none'],
                                      check_status=True, timeout=30, stdout=DEVNULL)
 
+
+    def generate_random_sharding(self):
+        prefixes = [
+            'm','O','P','L'
+        ]
+        new_sharding = ''
+        for prefix in prefixes:
+            choose = random.choice([False, True])
+            if not choose:
+                continue
+            if new_sharding != '':
+                new_sharding = new_sharding + ' '
+            columns = random.randint(1, 5)
+            do_hash = random.choice([False, True])
+            if do_hash:
+                low_hash = random.choice([0, 5, 8])
+                do_high_hash = random.choice([False, True])
+                if do_high_hash:
+                    high_hash = random.choice([8, 16, 30]) + low_hash
+                    new_sharding = new_sharding + prefix + '(' + str(columns) + ',' + str(low_hash) + '-' + str(high_hash) + ')'
+                else:
+                    new_sharding = new_sharding + prefix + '(' + str(columns) + ',' + str(low_hash) + '-)'
+            else:
+                if columns == 1:
+                    new_sharding = new_sharding + prefix
+                else:
+                    new_sharding = new_sharding + prefix + '(' + str(columns) + ')'
+        return new_sharding
+
+    def test_bluestore_reshard_action(self):
+        """
+        Test if resharding of bluestore works properly.
+        If bluestore is not used, or bluestore is in version that
+        does not support sharding, skip.
+        """
+
+        osd = random.choice(self.dead_osds)
+        remote = self.ceph_manager.find_remote('osd', osd)
+        FSPATH = self.ceph_manager.get_filepath()
+
+        prefix = [
+                '--no-mon-config',
+                '--log-file=/var/log/ceph/bluestore_tool.$pid.log',
+                '--log-level=10',
+                '--path', FSPATH.format(id=osd)
+            ]
+
+        # sanity check if bluestore-tool accessible
+        self.log('checking if target objectstore is bluestore on osd.%s' % osd)
+        cmd = prefix + [
+            'show-label'
+            ]
+        proc = self.run_ceph_bluestore_tool(remote, 'osd.%s' % osd, cmd)
+        if proc.exitstatus != 0:
+            raise Exception("ceph-bluestore-tool access failed.")
+
+        # check if sharding is possible
+        self.log('checking if target bluestore supports sharding on osd.%s' % osd)
+        cmd = prefix + [
+            'show-sharding'
+            ]
+        proc = self.run_ceph_bluestore_tool(remote, 'osd.%s' % osd, cmd)
+        if proc.exitstatus != 0:
+            self.log("Unable to test resharding, "
+                     "ceph-bluestore-tool does not support it.")
+            return
+
+        # now go for reshard to something else
+        self.log('applying new sharding to bluestore on osd.%s' % osd)
+        new_sharding = self.config.get('bluestore_new_sharding','random')
+
+        if new_sharding == 'random':
+            self.log('generate random sharding')
+            new_sharding = self.generate_random_sharding()
+
+        self.log("applying new sharding: " + new_sharding)
+        cmd = prefix + [
+            '--sharding', new_sharding,
+            'reshard'
+            ]
+        proc = self.run_ceph_bluestore_tool(remote, 'osd.%s' % osd, cmd)
+        if proc.exitstatus != 0:
+            raise Exception("ceph-bluestore-tool resharding failed.")
+
+        # now do fsck to
+        self.log('running fsck to verify new sharding on osd.%s' % osd)
+        cmd = prefix + [
+            'fsck'
+            ]
+        proc = self.run_ceph_bluestore_tool(remote, 'osd.%s' % osd, cmd)
+        if proc.exitstatus != 0:
+            raise Exception("ceph-bluestore-tool fsck failed.")
+        self.log('resharding successfully completed')
+
+    def test_bluestore_reshard(self):
+        """
+        1) kills an osd
+        2) reshards bluestore on killed osd
+        3) revives the osd
+        """
+        self.log('test_bluestore_reshard started')
+        self.kill_osd(mark_down=True, mark_out=True)
+        self.test_bluestore_reshard_action()
+        self.revive_osd()
+        self.log('test_bluestore_reshard completed')
+
+
     def test_map_discontinuity(self):
         """
         1) Allows the osds to recover
@@ -1110,6 +1255,13 @@ class OSDThrasher(Thrasher):
                                    True),
                  self.config.get('chance_inject_pause_long', 0),)]:
                 actions.append(scenario)
+
+        # only consider resharding if objectstore is bluestore
+        cluster_name = self.ceph_manager.cluster
+        cluster = self.ceph_manager.ctx.ceph[cluster_name]
+        if cluster.conf.get('osd', {}).get('osd objectstore', 'bluestore') == 'bluestore':
+            actions.append((self.test_bluestore_reshard,
+                            self.config.get('chance_bluestore_reshard', 0),))
 
         total = sum([y for (x, y) in actions])
         val = random.uniform(0, total)
@@ -1356,7 +1508,7 @@ class CephManager:
     """
 
     def __init__(self, controller, ctx=None, config=None, logger=None,
-                 cluster='ceph', cephadm=False):
+                 cluster='ceph', cephadm=False, rook=False) -> None:
         self.lock = threading.RLock()
         self.ctx = ctx
         self.config = config
@@ -1364,6 +1516,7 @@ class CephManager:
         self.next_pool_id = 0
         self.cluster = cluster
         self.cephadm = cephadm
+        self.rook = rook
         if (logger):
             self.log = lambda x: logger.info(x)
         else:
@@ -1410,6 +1563,11 @@ class CephManager:
                          args=['ceph'] + list(kwargs['args']),
                          stdout=StringIO(),
                          check_status=kwargs.get('check_status', True))
+        if self.rook:
+            return toolbox(self.ctx, self.cluster,
+                           args=['ceph'] + list(kwargs['args']),
+                           stdout=StringIO(),
+                           check_status=kwargs.get('check_status', True))
 
         testdir = teuthology.get_testdir(self.ctx)
         prefix = ['sudo', 'adjust-ulimits', 'ceph-coverage',
@@ -1418,7 +1576,7 @@ class CephManager:
         kwargs['args'] = prefix + list(kwargs['args'])
         return self.controller.run(**kwargs)
 
-    def raw_cluster_cmd(self, *args, **kwargs):
+    def raw_cluster_cmd(self, *args, **kwargs) -> str:
         """
         Start ceph on a raw cluster.  Return count
         """
@@ -1436,7 +1594,14 @@ class CephManager:
         kwargs['check_status'] = False
         return self.run_cluster_cmd(**kwargs).exitstatus
 
-    def run_ceph_w(self, watch_channel=None):
+    # XXX: Setting "shell" to True for LocalCephManager.run_ceph_w(), doesn't
+    # work with vstart_runner.py; see https://tracker.ceph.com/issues/49644.
+    # shell=False as default parameter is just to maintain compatibility
+    # between interfaces of CephManager.run_ceph_w() and
+    # LocalCephManager.run_ceph_w(). This doesn't affect how "ceph -w" process
+    # is launched by this method since this parameters remains unused in
+    # this method.
+    def run_ceph_w(self, watch_channel=None, shell=False):
         """
         Execute "ceph -w" in the background with stdout connected to a BytesIO,
         and return the RemoteProcess.
@@ -1545,10 +1710,13 @@ class CephManager:
     def flush_all_pg_stats(self):
         self.flush_pg_stats(range(len(self.get_osd_dump())))
 
-    def do_rados(self, remote, cmd, check_status=True):
+    def do_rados(self, cmd, pool=None, namespace=None, remote=None, **kwargs):
         """
         Execute a remote rados command.
         """
+        if remote is None:
+            remote = self.controller
+
         testdir = teuthology.get_testdir(self.ctx)
         pre = [
             'adjust-ulimits',
@@ -1558,11 +1726,15 @@ class CephManager:
             '--cluster',
             self.cluster,
             ]
+        if pool is not None:
+            pre += ['--pool', pool]
+        if namespace is not None:
+            pre += ['--namespace', namespace]
         pre.extend(cmd)
         proc = remote.run(
             args=pre,
             wait=True,
-            check_status=check_status
+            **kwargs
             )
         return proc
 
@@ -1573,7 +1745,6 @@ class CephManager:
         Threads not used yet.
         """
         args = [
-            '-p', pool,
             '--num-objects', num_objects,
             '-b', size,
             'bench', timelimit,
@@ -1581,59 +1752,42 @@ class CephManager:
             ]
         if not cleanup:
             args.append('--no-cleanup')
-        return self.do_rados(self.controller, map(str, args))
+        return self.do_rados(map(str, args), pool=pool)
 
     def do_put(self, pool, obj, fname, namespace=None):
         """
         Implement rados put operation
         """
-        args = ['-p', pool]
-        if namespace is not None:
-            args += ['-N', namespace]
-        args += [
-            'put',
-            obj,
-            fname
-        ]
+        args = ['put', obj, fname]
         return self.do_rados(
-            self.controller,
             args,
-            check_status=False
+            check_status=False,
+            pool=pool,
+            namespace=namespace
         ).exitstatus
 
     def do_get(self, pool, obj, fname='/dev/null', namespace=None):
         """
         Implement rados get operation
         """
-        args = ['-p', pool]
-        if namespace is not None:
-            args += ['-N', namespace]
-        args += [
-            'get',
-            obj,
-            fname
-        ]
+        args = ['get', obj, fname]
         return self.do_rados(
-            self.controller,
             args,
-            check_status=False
+            check_status=False,
+            pool=pool,
+            namespace=namespace,
         ).exitstatus
 
     def do_rm(self, pool, obj, namespace=None):
         """
         Implement rados rm operation
         """
-        args = ['-p', pool]
-        if namespace is not None:
-            args += ['-N', namespace]
-        args += [
-            'rm',
-            obj
-        ]
+        args = ['rm', obj]
         return self.do_rados(
-            self.controller,
             args,
-            check_status=False
+            check_status=False,
+            pool=pool,
+            namespace=namespace
         ).exitstatus
 
     def osd_admin_socket(self, osd_id, command, check_status=True, timeout=0, stdout=None):
@@ -1676,6 +1830,8 @@ class CephManager:
                 wait=True,
                 check_status=check_status,
             )
+        if self.rook:
+            assert False, 'not implemented'
 
         testdir = teuthology.get_testdir(self.ctx)
         args = [
@@ -2936,13 +3092,22 @@ class CephManager:
         Loop until quorum size is reached.
         """
         self.log('waiting for quorum size %d' % size)
-        start = time.time()
-        while not len(self.get_mon_quorum()) == size:
-            if timeout is not None:
-                assert time.time() - start < timeout, \
-                    ('failed to reach quorum size %d '
-                     'before timeout expired' % size)
-            time.sleep(3)
+        sleep = 3
+        with safe_while(sleep=sleep,
+                        tries=timeout // sleep,
+                        action=f'wait for quorum size {size}') as proceed:
+            while proceed():
+                try:
+                    if len(self.get_mon_quorum()) == size:
+                        break
+                except CommandFailedError as e:
+                    # could fail instea4d of blocked if the rotating key of the
+                    # connected monitor is not updated yet after they form the
+                    # quorum
+                    if e.exitstatus == errno.EACCES:
+                        pass
+                    else:
+                        raise
         self.log("quorum is size %d" % size)
 
     def get_mon_health(self, debug=False):

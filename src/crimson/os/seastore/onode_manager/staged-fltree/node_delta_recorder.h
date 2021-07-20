@@ -18,7 +18,10 @@ namespace crimson::os::seastore::onode {
 class DeltaRecorder {
  public:
   virtual ~DeltaRecorder() {
-    assert(is_empty());
+    /* May be non-empty if transaction is abandoned without
+     * being submitted -- conflicts are a particularly common
+     * example (denoted generally by returning crimson::ct_error::eagain).
+     */
   }
 
   bool is_empty() const {
@@ -26,7 +29,6 @@ class DeltaRecorder {
   }
 
   ceph::bufferlist get_delta() {
-    assert(!is_empty());
     return std::move(encoded);
   }
 
@@ -39,7 +41,7 @@ class DeltaRecorder {
   virtual field_type_t field_type() const = 0;
   virtual void apply_delta(ceph::bufferlist::const_iterator&,
                            NodeExtentMutable&,
-                           laddr_t) = 0;
+                           const NodeExtent&) = 0;
 
  protected:
   DeltaRecorder() = default;

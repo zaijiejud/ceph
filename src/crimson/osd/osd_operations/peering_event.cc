@@ -2,6 +2,7 @@
 // vim: ts=8 sw=2 smarttab
 
 #include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 
 #include "messages/MOSDPGLog.h"
 
@@ -113,6 +114,11 @@ RemotePeeringEvent::ConnectionPipeline &RemotePeeringEvent::cp()
   return get_osd_priv(conn.get()).peering_request_conn_pipeline;
 }
 
+RemotePeeringEvent::OSDPipeline &RemotePeeringEvent::op()
+{
+  return osd.peering_request_osd_pipeline;
+}
+
 void RemotePeeringEvent::on_pg_absent()
 {
   if (auto& e = get_event().get_event();
@@ -123,7 +129,7 @@ void RemotePeeringEvent::on_pg_absent()
     const pg_info_t empty{spg_t{pgid.pgid, q.query.to}};
     if (q.query.type == q.query.LOG ||
 	q.query.type == q.query.FULLLOG)  {
-      auto m = ceph::make_message<MOSDPGLog>(q.query.from, q.query.to,
+      auto m = crimson::make_message<MOSDPGLog>(q.query.from, q.query.to,
 					     map_epoch, empty,
 					     q.query.epoch_sent);
       ctx.send_osd_message(q.from.osd, std::move(m));
@@ -141,15 +147,23 @@ seastar::future<> RemotePeeringEvent::complete_rctx(Ref<PG> pg)
   if (pg) {
     return PeeringEvent::complete_rctx(pg);
   } else {
-    return shard_services.dispatch_context_messages(std::move(ctx));
+    logger().debug("{}: OSDState is {}", *this, osd.state);
+    return osd.state.when_active().then([this] {
+      assert(osd.state.is_active());
+      return shard_services.dispatch_context_messages(std::move(ctx));
+    });
   }
 }
 
 seastar::future<Ref<PG>> RemotePeeringEvent::get_pg()
 {
   return with_blocking_future(
-    handle.enter(cp().await_map)
+    handle.enter(op().await_active)
   ).then([this] {
+    return osd.state.when_active();
+  }).then([this] {
+    return with_blocking_future(handle.enter(cp().await_map));
+  }).then([this] {
     return with_blocking_future(
       osd.osdmap_gate.wait_for_map(evt.get_epoch_sent()));
   }).then([this](auto epoch) {

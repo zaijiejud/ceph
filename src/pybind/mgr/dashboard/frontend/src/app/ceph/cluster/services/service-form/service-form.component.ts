@@ -18,6 +18,7 @@ import { CdFormBuilder } from '~/app/shared/forms/cd-form-builder';
 import { CdFormGroup } from '~/app/shared/forms/cd-form-group';
 import { CdValidators } from '~/app/shared/forms/cd-validators';
 import { FinishedTask } from '~/app/shared/models/finished-task';
+import { CephServiceSpec } from '~/app/shared/models/service.interface';
 import { TaskWrapperService } from '~/app/shared/services/task-wrapper.service';
 
 @Component({
@@ -38,6 +39,7 @@ export class ServiceFormComponent extends CdForm implements OnInit {
   labelClick = new Subject<string>();
   labelFocus = new Subject<string>();
   pools: Array<object>;
+  services: Array<CephServiceSpec> = [];
 
   constructor(
     public actionLabels: ActionLabelsI18n,
@@ -75,6 +77,9 @@ export class ServiceFormComponent extends CdForm implements OnInit {
           }),
           CdValidators.requiredIf({
             service_type: 'iscsi'
+          }),
+          CdValidators.requiredIf({
+            service_type: 'ingress'
           }),
           CdValidators.composeIf(
             {
@@ -147,7 +152,29 @@ export class ServiceFormComponent extends CdForm implements OnInit {
           })
         ]
       ],
-      // RGW & iSCSI
+      // Ingress
+      backend_service: [
+        null,
+        [
+          CdValidators.requiredIf({
+            service_type: 'ingress',
+            unmanaged: false
+          })
+        ]
+      ],
+      virtual_ip: [
+        null,
+        [
+          CdValidators.requiredIf({
+            service_type: 'ingress',
+            unmanaged: false
+          })
+        ]
+      ],
+      frontend_port: [null, [CdValidators.number(false), Validators.min(1), Validators.max(65535)]],
+      monitor_port: [null, [CdValidators.number(false), Validators.min(1), Validators.max(65535)]],
+      virtual_interface_networks: [null],
+      // RGW, Ingress & iSCSI
       ssl: [false],
       ssl_cert: [
         '',
@@ -173,14 +200,6 @@ export class ServiceFormComponent extends CdForm implements OnInit {
       ssl_key: [
         '',
         [
-          CdValidators.composeIf(
-            {
-              service_type: 'rgw',
-              unmanaged: false,
-              ssl: true
-            },
-            [Validators.required, CdValidators.sslPrivKey()]
-          ),
           CdValidators.composeIf(
             {
               service_type: 'iscsi',
@@ -218,6 +237,9 @@ export class ServiceFormComponent extends CdForm implements OnInit {
     this.poolService.getList().subscribe((resp: Array<object>) => {
       this.pools = resp;
     });
+    this.cephServiceService.list().subscribe((services: CephServiceSpec[]) => {
+      this.services = services.filter((service: any) => service.service_type === 'rgw');
+    });
   }
 
   goToListView() {
@@ -249,6 +271,13 @@ export class ServiceFormComponent extends CdForm implements OnInit {
       control.updateValueAndValidity();
     });
     reader.readAsText(file, 'utf8');
+  }
+
+  prePopulateId() {
+    const control: AbstractControl = this.serviceForm.get('service_id');
+    const backendService = this.serviceForm.getValue('backend_service');
+    // Set Id as read-only
+    control.reset({ value: backendService, disabled: true });
   }
 
   onSubmit() {
@@ -294,7 +323,6 @@ export class ServiceFormComponent extends CdForm implements OnInit {
           serviceSpec['ssl'] = values['ssl'];
           if (values['ssl']) {
             serviceSpec['rgw_frontend_ssl_certificate'] = values['ssl_cert'].trim();
-            serviceSpec['rgw_frontend_ssl_key'] = values['ssl_key'].trim();
           }
           break;
         case 'iscsi':
@@ -312,6 +340,25 @@ export class ServiceFormComponent extends CdForm implements OnInit {
             serviceSpec['ssl_cert'] = values['ssl_cert'].trim();
             serviceSpec['ssl_key'] = values['ssl_key'].trim();
           }
+          break;
+        case 'ingress':
+          serviceSpec['backend_service'] = values['backend_service'];
+          serviceSpec['service_id'] = values['backend_service'];
+          if (_.isString(values['virtual_ip']) && !_.isEmpty(values['virtual_ip'])) {
+            serviceSpec['virtual_ip'] = values['virtual_ip'].trim();
+          }
+          if (_.isNumber(values['frontend_port']) && values['frontend_port'] > 0) {
+            serviceSpec['frontend_port'] = values['frontend_port'];
+          }
+          if (_.isNumber(values['monitor_port']) && values['monitor_port'] > 0) {
+            serviceSpec['monitor_port'] = values['monitor_port'];
+          }
+          serviceSpec['ssl'] = values['ssl'];
+          if (values['ssl']) {
+            serviceSpec['ssl_cert'] = values['ssl_cert'].trim();
+            serviceSpec['ssl_key'] = values['ssl_key'].trim();
+          }
+          serviceSpec['virtual_interface_networks'] = values['virtual_interface_networks'];
           break;
       }
     }

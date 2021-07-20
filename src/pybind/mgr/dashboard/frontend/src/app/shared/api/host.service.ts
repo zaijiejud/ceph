@@ -25,8 +25,12 @@ export class HostService {
     return this.http.get<object[]>(this.baseURL);
   }
 
-  create(hostname: string) {
-    return this.http.post(this.baseURL, { hostname: hostname }, { observe: 'response' });
+  create(hostname: string, addr: string, labels: string[], status: string) {
+    return this.http.post(
+      this.baseURL,
+      { hostname: hostname, addr: addr, labels: labels, status: status },
+      { observe: 'response', headers: { Accept: 'application/vnd.ceph.api.v0.1+json' } }
+    );
   }
 
   delete(hostname: string) {
@@ -51,8 +55,23 @@ export class HostService {
     return this.http.get<string[]>(`${this.baseUIURL}/labels`);
   }
 
-  update(hostname: string, labels: string[]) {
-    return this.http.put(`${this.baseURL}/${hostname}`, { labels: labels });
+  update(
+    hostname: string,
+    updateLabels = false,
+    labels: string[] = [],
+    maintenance = false,
+    force = false
+  ) {
+    return this.http.put(
+      `${this.baseURL}/${hostname}`,
+      {
+        update_labels: updateLabels,
+        labels: labels,
+        maintenance: maintenance,
+        force: force
+      },
+      { headers: { Accept: 'application/vnd.ceph.api.v0.1+json' } }
+    );
   }
 
   identifyDevice(hostname: string, device: string, duration: number) {

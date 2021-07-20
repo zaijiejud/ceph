@@ -8,11 +8,55 @@
 
 namespace crimson::os::seastore::onode {
 
-class TestValue final : public Value {
- public:
-  static constexpr auto HEADER_MAGIC = value_magic_t::TEST;
+struct test_item_t {
   using id_t = uint16_t;
   using magic_t = uint32_t;
+
+  value_size_t size;
+  id_t id;
+  magic_t magic;
+
+  value_size_t get_payload_size() const {
+    assert(size > sizeof(value_header_t));
+    return static_cast<value_size_t>(size - sizeof(value_header_t));
+  }
+
+  static test_item_t create(std::size_t _size, std::size_t _id) {
+    ceph_assert(_size <= std::numeric_limits<value_size_t>::max());
+    ceph_assert(_size > sizeof(value_header_t));
+    value_size_t size = _size;
+
+    ceph_assert(_id <= std::numeric_limits<id_t>::max());
+    id_t id = _id;
+
+    return {size, id, (magic_t)id * 137};
+  }
+};
+inline std::ostream& operator<<(std::ostream& os, const test_item_t& item) {
+  return os << "TestItem(#" << item.id << ", " << item.size << "B)";
+}
+
+template <value_magic_t MAGIC,
+          string_size_t MAX_NS_SIZE,
+          string_size_t MAX_OID_SIZE,
+          value_size_t  MAX_VALUE_PAYLOAD_SIZE,
+          extent_len_t  INTERNAL_NODE_SIZE,
+          extent_len_t  LEAF_NODE_SIZE,
+          bool          DO_SPLIT_CHECK>
+class TestValue final : public Value {
+ public:
+  static constexpr tree_conf_t TREE_CONF = {
+    MAGIC,
+    MAX_NS_SIZE,
+    MAX_OID_SIZE,
+    MAX_VALUE_PAYLOAD_SIZE,
+    INTERNAL_NODE_SIZE,
+    LEAF_NODE_SIZE,
+    DO_SPLIT_CHECK
+  };
+
+  using id_t = test_item_t::id_t;
+  using magic_t = test_item_t::magic_t;
   struct magic_packed_t {
     magic_t value;
   } __attribute__((packed));
@@ -66,7 +110,7 @@ class TestValue final : public Value {
 
    protected:
     value_magic_t get_header_magic() const override {
-      return HEADER_MAGIC;
+      return TREE_CONF.value_magic;
     }
 
     void apply_value_delta(ceph::bufferlist::const_iterator& delta,
@@ -138,6 +182,32 @@ class TestValue final : public Value {
     }
     Replayable::set_tail_magic(value_mutable.first, magic);
   }
+
+  /*
+   * tree_util.h related interfaces
+   */
+
+  using item_t = test_item_t;
+
+  void initialize(Transaction& t, const item_t& item) {
+    ceph_assert(get_payload_size() + sizeof(value_header_t) == item.size);
+    set_id_replayable(t, item.id);
+    set_tail_magic_replayable(t, item.magic);
+  }
+
+  void validate(const item_t& item) const {
+    ceph_assert(get_payload_size() + sizeof(value_header_t) == item.size);
+    ceph_assert(get_id() == item.id);
+    ceph_assert(get_tail_magic() == item.magic);
+  }
 };
+
+using UnboundedValue = TestValue<
+  value_magic_t::TEST_UNBOUND, 4096, 4096, 4096, 4096,  4096, false>;
+using BoundedValue   = TestValue<
+  value_magic_t::TEST_BOUNDED,  320,  320,  640, 4096,  4096, true>;
+// should be the same configuration with FLTreeOnode
+using ExtendedValue  = TestValue<
+  value_magic_t::TEST_EXTENDED, 256, 2048, 1200, 8192, 16384, true>;
 
 }

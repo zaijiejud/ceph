@@ -23,6 +23,8 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 
+#include "common/split.h"
+
 #include "services/svc_config_key.h"
 #include "services/svc_zone.h"
 
@@ -250,14 +252,18 @@ void handle_connection(boost::asio::io_context& context,
                                   rgw::io::add_conlen_controlling(
                                     &real_client))));
       RGWRestfulIO client(cct, &real_client_io);
-      auto y = optional_yield{context, yield};
+      optional_yield y = null_yield;
+      if (cct->_conf->rgw_beast_enable_async) {
+        y = optional_yield{context, yield};
+      }
       int http_ret = 0;
       string user = "-";
       const auto started = ceph::coarse_real_clock::now();
+      ceph::coarse_real_clock::duration latency{};
 
       process_request(env.store, env.rest, &req, env.uri_prefix,
                       *env.auth_registry, &client, env.olog, y,
-                      scheduler, &user, &http_ret);
+                      scheduler, &user, &latency, &http_ret);
 
       if (cct->_conf->subsys.should_gather(dout_subsys, 1)) {
         // access log line elements begin per Apache Combined Log Format with additions following
@@ -268,7 +274,8 @@ void handle_connection(boost::asio::io_context& context,
             << client.get_bytes_sent() + client.get_bytes_received() << ' '
             << log_header{message, http::field::referer, "\""} << ' '
             << log_header{message, http::field::user_agent, "\""} << ' '
-            << log_header{message, http::field::range} << dendl;
+            << log_header{message, http::field::range} << " latency="
+            << latency << dendl;
       }
     }
 
@@ -415,7 +422,7 @@ class AsioFrontend {
   void stop();
   void join();
   void pause();
-  void unpause(rgw::sal::RGWStore* store, rgw_auth_registry_ptr_t);
+  void unpause(rgw::sal::Store* store, rgw_auth_registry_ptr_t);
 };
 
 unsigned short parse_port(const char *input, boost::system::error_code& ec)
@@ -629,7 +636,7 @@ class ExpandMetaVar {
   map<string, string> meta_map;
 
 public:
-  ExpandMetaVar(rgw::sal::Zone *zone_svc) {
+  ExpandMetaVar(rgw::sal::Zone* zone_svc) {
     meta_map["realm"] = zone_svc->get_realm().get_name();
     meta_map["realm_id"] = zone_svc->get_realm().get_id();
     meta_map["zonegroup"] = zone_svc->get_zonegroup().get_name();
@@ -794,6 +801,56 @@ int AsioFrontend::init_ssl()
   if (key && !cert) {
     lderr(ctx()) << "no ssl_certificate configured for ssl_private_key" << dendl;
     return -EINVAL;
+  }
+
+  std::optional<string> options = conf->get_val("ssl_options");
+  if (options) {
+    if (!cert) {
+      lderr(ctx()) << "no ssl_certificate configured for ssl_options" << dendl;
+      return -EINVAL;
+    }
+  } else if (cert) {
+    options = "no_sslv2:no_sslv3:no_tlsv1:no_tlsv1_1";
+  }
+
+  if (options) {
+    for (auto &option : ceph::split(*options, ":")) {
+      if (option == "default_workarounds") {
+        ssl_context->set_options(ssl::context::default_workarounds);
+      } else if (option == "no_compression") {
+        ssl_context->set_options(ssl::context::no_compression);
+      } else if (option == "no_sslv2") {
+        ssl_context->set_options(ssl::context::no_sslv2);
+      } else if (option == "no_sslv3") {
+        ssl_context->set_options(ssl::context::no_sslv3);
+      } else if (option == "no_tlsv1") {
+        ssl_context->set_options(ssl::context::no_tlsv1);
+      } else if (option == "no_tlsv1_1") {
+        ssl_context->set_options(ssl::context::no_tlsv1_1);
+      } else if (option == "no_tlsv1_2") {
+        ssl_context->set_options(ssl::context::no_tlsv1_2);
+      } else if (option == "single_dh_use") {
+        ssl_context->set_options(ssl::context::single_dh_use);
+      } else {
+        lderr(ctx()) << "ignoring unknown ssl option '" << option << "'" << dendl;
+      }
+    }
+  }
+
+  std::optional<string> ciphers = conf->get_val("ssl_ciphers");
+  if (ciphers) {
+    if (!cert) {
+      lderr(ctx()) << "no ssl_certificate configured for ssl_ciphers" << dendl;
+      return -EINVAL;
+    }
+
+    int r = SSL_CTX_set_cipher_list(ssl_context->native_handle(),
+                                    ciphers->c_str());
+    if (r == 0) {
+      lderr(ctx()) << "no cipher could be selected from ssl_ciphers: "
+                   << *ciphers << dendl;
+      return -EINVAL;
+    }
   }
 
   auto ports = config.equal_range("ssl_port");
@@ -1013,7 +1070,7 @@ void AsioFrontend::pause()
   }
 }
 
-void AsioFrontend::unpause(rgw::sal::RGWStore* const store,
+void AsioFrontend::unpause(rgw::sal::Store* const store,
                            rgw_auth_registry_ptr_t auth_registry)
 {
   env.store = store;
@@ -1077,7 +1134,7 @@ void RGWAsioFrontend::pause_for_new_config()
 }
 
 void RGWAsioFrontend::unpause_with_new_config(
-  rgw::sal::RGWStore* const store,
+  rgw::sal::Store* const store,
   rgw_auth_registry_ptr_t auth_registry
 ) {
   impl->unpause(store, std::move(auth_registry));

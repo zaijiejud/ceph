@@ -1521,6 +1521,7 @@ public:
 			    std::ostream *out) const;
   bool stretch_set_can_peer(const vector<int>& want, const OSDMap& osdmap,
 			    std::ostream *out) const {
+    if (!is_stretch_pool()) return true;
     set<int> swant;
     for (auto i : want) swant.insert(i);
     return stretch_set_can_peer(swant, osdmap, out);
@@ -1630,12 +1631,12 @@ public:
   }
 
   int64_t get_dedup_tier() const {
-    int64_t tier_id;
+    int64_t tier_id = 0;
     opts.get(pool_opts_t::DEDUP_TIER, &tier_id);
     return tier_id;
   }
   int64_t get_dedup_cdc_chunk_size() const {
-    int64_t chunk_size;
+    int64_t chunk_size = 0;
     opts.get(pool_opts_t::DEDUP_CDC_CHUNK_SIZE, &chunk_size);
     return chunk_size;
   }
@@ -5309,7 +5310,7 @@ struct object_copy_data_t {
   utime_t mtime;
   uint32_t data_digest, omap_digest;
   uint32_t flags;
-  std::map<std::string, ceph::buffer::list> attrs;
+  std::map<std::string, ceph::buffer::list, std::less<>> attrs;
   ceph::buffer::list data;
   ceph::buffer::list omap_header;
   ceph::buffer::list omap_data;
@@ -6030,7 +6031,7 @@ struct PushOp {
   interval_set<uint64_t> data_included;
   ceph::buffer::list omap_header;
   std::map<std::string, ceph::buffer::list> omap_entries;
-  std::map<std::string, ceph::buffer::list> attrset;
+  std::map<std::string, ceph::buffer::list, std::less<>> attrset;
 
   ObjectRecoveryInfo recovery_info;
   ObjectRecoveryProgress before_progress;
@@ -6055,7 +6056,7 @@ enum class scrub_type_t : bool { not_repair = false, do_repair = true };
  */
 struct ScrubMap {
   struct object {
-    std::map<std::string, ceph::buffer::ptr> attrs;
+    std::map<std::string, ceph::buffer::ptr, std::less<>> attrs;
     uint64_t size;
     __u32 omap_digest;         ///< omap crc32c
     __u32 digest;              ///< data crc32c

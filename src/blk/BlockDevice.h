@@ -64,6 +64,12 @@
 #define  WRITE_LIFE_MAX  	1
 #endif
 
+enum struct blk_access_mode_t {
+  DIRECT,
+  BUFFERED
+};
+blk_access_mode_t buffermode(bool buffered);
+std::ostream& operator<<(std::ostream& os, const blk_access_mode_t buffered);
 
 /// track in-flight io
 struct IOContext {
@@ -199,6 +205,9 @@ public:
     ceph_assert(is_smr());
     return conventional_region_size;
   }
+  virtual void reset_zones(const std::set<uint64_t>& zones) {
+    ceph_assert(is_smr());
+  }
 
   virtual void aio_submit(IOContext *ioc) = 0;
 
@@ -262,9 +271,6 @@ public:
   virtual int discard(uint64_t offset, uint64_t len) { return 0; }
   virtual int queue_discard(interval_set<uint64_t> &to_release) { return -1; }
   virtual void discard_drain() { return; }
-
-  void queue_reap_ioc(IOContext *ioc);
-  void reap_ioc();
 
   // for managing buffered readers/writers
   virtual int invalidate_cache(uint64_t off, uint64_t len) = 0;

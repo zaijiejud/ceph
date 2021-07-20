@@ -345,6 +345,11 @@ function test_tiering_1()
   ceph osd tier add slow cache
   ceph osd tier add slow cache2
   expect_false ceph osd tier add slow2 cache
+  # application metadata should propagate to the tiers
+  ceph osd pool ls detail -f json | jq '.[] | select(.pool_name == "slow") | .application_metadata["rados"]' | grep '{}'
+  ceph osd pool ls detail -f json | jq '.[] | select(.pool_name == "slow2") | .application_metadata["rados"]' | grep '{}'
+  ceph osd pool ls detail -f json | jq '.[] | select(.pool_name == "cache") | .application_metadata["rados"]' | grep '{}'
+  ceph osd pool ls detail -f json | jq '.[] | select(.pool_name == "cache2") | .application_metadata["rados"]' | grep '{}'
   # forward and proxy are removed/deprecated
   expect_false ceph osd tier cache-mode cache forward
   expect_false ceph osd tier cache-mode cache forward --yes-i-really-mean-it
@@ -2460,7 +2465,7 @@ function test_mon_osd_erasure_code()
   ceph osd erasure-code-profile set fooprofile a=b c=d e=f --force
   ceph osd erasure-code-profile set fooprofile a=b c=d e=f
   expect_false ceph osd erasure-code-profile set fooprofile a=b c=d e=f g=h
-  # make sure ruleset-foo doesn't work anymore
+  # make sure rule-foo doesn't work anymore
   expect_false ceph osd erasure-code-profile set barprofile ruleset-failure-domain=host
   ceph osd erasure-code-profile set barprofile crush-failure-domain=host
   # clean up

@@ -871,6 +871,8 @@ bool MgrMonitor::promote_standby()
     auto replacement_gid = pending_map.standbys.begin()->first;
     pending_map.active_gid = replacement_gid;
     pending_map.active_name = pending_map.standbys.at(replacement_gid).name;
+    pending_map.available_modules =
+      pending_map.standbys.at(replacement_gid).available_modules;
     pending_map.active_mgr_features =
       pending_map.standbys.at(replacement_gid).mgr_features;
     pending_map.available = false;
@@ -974,8 +976,7 @@ bool MgrMonitor::preprocess_command(MonOpRequestRef op)
     f->close_section();
     f->flush(rdata);
   } else if (prefix == "mgr dump") {
-    int64_t epoch = 0;
-    cmd_getval(cmdmap, "epoch", epoch, (int64_t)map.get_epoch());
+    int64_t epoch = cmd_getval_or<int64_t>(cmdmap, "epoch", map.get_epoch());
     if (epoch == (int64_t)map.get_epoch()) {
       f->dump_object("mgrmap", map);
     } else {
@@ -1108,8 +1109,7 @@ bool MgrMonitor::prepare_command(MonOpRequestRef op)
     return true;
   }
 
-  string format;
-  cmd_getval(cmdmap, "format", format, string("plain"));
+  string format = cmd_getval_or<string>(cmdmap, "format", "plain");
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
 
   string prefix;
@@ -1184,10 +1184,10 @@ bool MgrMonitor::prepare_command(MonOpRequestRef op)
       ss << "module '" << module << "' is already enabled (always-on)";
       goto out;
     }
-    string force;
-    cmd_getval(cmdmap, "force", force);
+    bool force = false;
+    cmd_getval_compat_cephbool(cmdmap, "force", force);
     if (!pending_map.all_support_module(module) &&
-	force != "--force") {
+	!force) {
       ss << "all mgr daemons do not support module '" << module << "', pass "
 	 << "--force to force enablement";
       r = -ENOENT;
@@ -1195,7 +1195,7 @@ bool MgrMonitor::prepare_command(MonOpRequestRef op)
     }
 
     std::string can_run_error;
-    if (force != "--force" && !pending_map.can_run_module(module, &can_run_error)) {
+    if (!force && !pending_map.can_run_module(module, &can_run_error)) {
       ss << "module '" << module << "' reports that it cannot run on the active "
             "manager daemon: " << can_run_error << " (pass --force to force "
             "enablement)";

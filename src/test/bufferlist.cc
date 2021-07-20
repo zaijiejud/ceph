@@ -1350,6 +1350,22 @@ TEST(BufferList, BenchAlloc) {
   bench_bufferlist_alloc(4, 100000, 16);
 }
 
+/*
+ * append_bench tests now have multiple variants:
+ *
+ * Version 1 tests allocate a single bufferlist during loop iteration.
+ * Ultimately very little memory is utilized since the bufferlist immediately
+ * drops out of scope. This was the original variant of these tests but showed
+ * unexpected performance characteristics that appears to be tied to tcmalloc
+ * and/or kernel behavior depending on the bufferlist size and step size.
+ *
+ * Version 2 tests allocate a configurable number of bufferlists that are
+ * replaced round-robin during loop iteration.  Version 2 tests are designed
+ * to better mimic performance when multiple bufferlists are in memory at the
+ * same time.  During testing this showed more consistent and seemingly
+ * accurate behavior across bufferlist and step sizes.
+ */
+
 TEST(BufferList, append_bench_with_size_hint) {
   std::array<char, 1048576> src = { 0, };
 
@@ -1371,12 +1387,39 @@ TEST(BufferList, append_bench_with_size_hint) {
   }
 }
 
-TEST(BufferList, append_bench) {
+TEST(BufferList, append_bench_with_size_hint2) {
   std::array<char, 1048576> src = { 0, };
+  constexpr size_t rounds = 4000;
+  constexpr int conc_bl = 400;
+  std::vector<ceph::bufferlist*> bls(conc_bl);
 
+  for (int i = 0; i < conc_bl; i++) {
+    bls[i] = new ceph::bufferlist;
+  }
   for (size_t step = 4; step <= 16384; step *= 4) {
     const utime_t start = ceph_clock_now();
+    for (size_t r = 0; r < rounds; ++r) {
+      delete bls[r % conc_bl];
+      bls[r % conc_bl] = new ceph::bufferlist(std::size(src));
+      for (auto iter = std::begin(src);
+           iter != std::end(src);
+           iter = std::next(iter, step)) {
+        bls[r % conc_bl]->append(&*iter, step);
+      }
+    }
+    cout << rounds << " fills of buffer len " << src.size()
+         << " with " << step << " byte appends in "
+         << (ceph_clock_now() - start) << std::endl;
+  }
+  for (int i = 0; i < conc_bl; i++) {
+    delete bls[i];
+  }
+}
 
+TEST(BufferList, append_bench) {
+  std::array<char, 1048576> src = { 0, };
+  for (size_t step = 4; step <= 16384; step *= 4) {
+    const utime_t start = ceph_clock_now();
     constexpr size_t rounds = 4000;
     for (size_t r = 0; r < rounds; ++r) {
       ceph::bufferlist bl;
@@ -1389,6 +1432,80 @@ TEST(BufferList, append_bench) {
     cout << rounds << " fills of buffer len " << src.size()
 	 << " with " << step << " byte appends in "
 	 << (ceph_clock_now() - start) << std::endl;
+  }
+}
+
+TEST(BufferList, append_bench2) {
+  std::array<char, 1048576> src = { 0, };
+  constexpr size_t rounds = 4000;
+  constexpr int conc_bl = 400;
+  std::vector<ceph::bufferlist*> bls(conc_bl);
+
+  for (int i = 0; i < conc_bl; i++) {
+    bls[i] = new ceph::bufferlist;
+  }
+  for (size_t step = 4; step <= 16384; step *= 4) {
+    const utime_t start = ceph_clock_now();
+    for (size_t r = 0; r < rounds; ++r) {
+      delete bls[r % conc_bl];
+      bls[r % conc_bl] = new ceph::bufferlist;
+      for (auto iter = std::begin(src);
+	   iter != std::end(src);
+	   iter = std::next(iter, step)) {
+	bls[r % conc_bl]->append(&*iter, step);
+      }
+    }
+    cout << rounds << " fills of buffer len " << src.size()
+	 << " with " << step << " byte appends in "
+	 << (ceph_clock_now() - start) << std::endl;
+  }
+  for (int i = 0; i < conc_bl; i++) {
+    delete bls[i];
+  }
+}
+
+TEST(BufferList, append_hole_bench) {
+  constexpr size_t targeted_bl_size = 1048576;
+
+  for (size_t step = 512; step <= 65536; step *= 2) {
+    const utime_t start = ceph_clock_now();
+    constexpr size_t rounds = 80000;
+    for (size_t r = 0; r < rounds; ++r) {
+      ceph::bufferlist bl;
+      while (bl.length() < targeted_bl_size) {
+	bl.append_hole(step);
+      }
+    }
+    cout << rounds << " fills of buffer len " << targeted_bl_size
+	 << " with " << step << " byte long append_hole in "
+	 << (ceph_clock_now() - start) << std::endl;
+  }
+}
+
+TEST(BufferList, append_hole_bench2) {
+  constexpr size_t targeted_bl_size = 1048576;
+  constexpr size_t rounds = 80000;
+  constexpr int conc_bl = 400;
+  std::vector<ceph::bufferlist*> bls(conc_bl);
+
+  for (int i = 0; i < conc_bl; i++) {
+    bls[i] = new ceph::bufferlist;
+  }
+  for (size_t step = 512; step <= 65536; step *= 2) {
+    const utime_t start = ceph_clock_now();
+    for (size_t r = 0; r < rounds; ++r) {
+      delete bls[r % conc_bl];
+      bls[r % conc_bl] = new ceph::bufferlist;
+      while (bls[r % conc_bl]->length() < targeted_bl_size) {
+	bls[r % conc_bl]->append_hole(step);
+      }
+    }
+    cout << rounds << " fills of buffer len " << targeted_bl_size
+	 << " with " << step << " byte long append_hole in "
+	 << (ceph_clock_now() - start) << std::endl;
+  }
+  for (int i = 0; i < conc_bl; i++) {
+    delete bls[i];
   }
 }
 
@@ -1731,6 +1848,23 @@ TEST(BufferList, rebuild_aligned_size_and_memory) {
   EXPECT_TRUE(bl.is_aligned(SIMD_ALIGN));
   EXPECT_TRUE(bl.is_n_align_sized(BUFFER_SIZE));
   EXPECT_EQ(3U, bl.get_num_buffers());
+
+  {
+    /* bug replicator, to test rebuild_aligned_size_and_memory() in the
+     * scenario where the first bptr is both size and memory aligned and
+     * the second is 0-length */
+    bl.clear();
+    bufferptr ptr1(buffer::create_aligned(4096, 4096));
+    bl.append(ptr1);
+    bufferptr ptr(10);
+    /* bl.back().length() must be 0 */
+    bl.append(ptr, 0, 0);
+    EXPECT_EQ(bl.get_num_buffers(), 2);
+    EXPECT_EQ(bl.back().length(), 0);
+    /* rebuild_aligned() calls rebuild_aligned_size_and_memory() */
+    bl.rebuild_aligned(4096);
+    EXPECT_EQ(bl.get_num_buffers(), 1);
+  }
 }
 
 TEST(BufferList, is_zero) {

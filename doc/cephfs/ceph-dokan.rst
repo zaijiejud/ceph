@@ -1,3 +1,5 @@
+.. _ceph-dokan:
+
 =======================
 Mount CephFS on Windows
 =======================
@@ -6,41 +8,13 @@ Mount CephFS on Windows
 It leverages Dokany, a Windows driver that allows implementing filesystems in
 userspace, pretty much like FUSE.
 
-Prerequisites
-=============
-
-Dokany
-------
-
-``ceph-dokan`` requires Dokany to be installed. You may fetch the installer as
-well as the source code from the Dokany Github repository:
-https://github.com/dokan-dev/dokany/releases
-
-The minimum supported Dokany version is 1.3.1. At the time of the writing,
-Dokany 2.0 is in Beta stage and is unsupported.
-
-Supported platforms
--------------------
-
-Windows Server 2019 and Windows Server 2016 are supported. Previous Windows
-Server versions, including Windows client versions such as Windows 10, might
-work but haven't been tested.
-
-Configuration
-=============
-
-``ceph-dokan`` requires minimal configuration. Please check the
-`Windows configuration sample`_ to get started.
-
-You'll also need a keyring file. The `General Prerequisites`_ page provides a
-simple example, showing how a new CephX user can be created and how its secret
-key can be retrieved.
-
-For more details on CephX user management, see the `Client Authentication`_
-and :ref:`User Management <user-management>`.
+Please check the `installation guide`_ to get started.
 
 Usage
 =====
+
+Mounting filesystems
+--------------------
 
 In order to mount a ceph filesystem, the following command can be used::
 
@@ -61,6 +35,27 @@ changed using the following ``ceph.conf`` options::
     client_mount_uid = 1000
     client_mount_gid = 1000
 
+If you have more than one FS on your Ceph cluster, use the option
+``--client_fs`` to mount the non-default FS::
+
+    mkdir -Force C:\mnt\mycephfs2
+    ceph-dokan.exe --mountpoint C:\mnt\mycephfs2 --client_fs mycephfs2
+
+CephFS subdirectories can be mounted using the ``--root-path`` parameter::
+
+    ceph-dokan -l y --root-path /a
+
+If the ``-o --removable`` flags are set, the mounts will show up in the
+``Get-Volume`` results::
+
+    PS C:\> Get-Volume -FriendlyName "Ceph*" | `
+            Select-Object -Property @("DriveLetter", "Filesystem", "FilesystemLabel")
+
+    DriveLetter Filesystem FilesystemLabel
+    ----------- ---------- ---------------
+              Z Ceph       Ceph
+              W Ceph       Ceph - new_fs
+
 Please use ``ceph-dokan --help`` for a full list of arguments.
 
 Credentials
@@ -71,6 +66,17 @@ use for mounting CephFS. The following commands are equivalent::
 
     ceph-dokan --id foo -l x
     ceph-dokan --name client.foo -l x
+
+Unmounting filesystems
+----------------------
+
+The mount can be removed by either issuing ctrl-c or using the unmap command,
+like so::
+
+    ceph-dokan.exe unmap -l x
+
+Note that when unmapping Ceph filesystems, the exact same mountpoint argument
+must be used as when the mapping was created.
 
 Limitations
 -----------
@@ -87,6 +93,10 @@ Unlike ``rbd-wnbd``, ``ceph-dokan`` doesn't currently provide a ``service``
 command. In order for the cephfs mount to survive host reboots, consider using
 ``NSSM``.
 
-.. _Windows configuration sample: ../windows-basic-config
-.. _General Prerequisites: ../mount-prerequisites
-.. _Client Authentication: ../client-auth
+Troubleshooting
+===============
+
+Please consult the `Windows troubleshooting`_ page.
+
+.. _Windows troubleshooting: ../../install/windows-troubleshooting
+.. _installation guide: ../../install/windows-install

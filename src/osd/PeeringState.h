@@ -61,27 +61,29 @@ struct PeeringCtx;
 
 // [primary only] content recovery state
 struct BufferedRecoveryMessages {
-  ceph_release_t require_osd_release;
+#if defined(WITH_SEASTAR)
+  std::map<int, std::vector<MessageURef>> message_map;
+#else
   std::map<int, std::vector<MessageRef>> message_map;
+#endif
 
-  BufferedRecoveryMessages(ceph_release_t r)
-    : require_osd_release(r) {
-  }
-  BufferedRecoveryMessages(ceph_release_t r, PeeringCtx &ctx);
+  BufferedRecoveryMessages() = default;
+  BufferedRecoveryMessages(PeeringCtx &ctx);
 
   void accept_buffered_messages(BufferedRecoveryMessages &m) {
     for (auto &[target, ls] : m.message_map) {
       auto &ovec = message_map[target];
       // put buffered messages in front
       ls.reserve(ls.size() + ovec.size());
-      ls.insert(ls.end(), ovec.begin(), ovec.end());
+      ls.insert(ls.end(), std::make_move_iterator(ovec.begin()), std::make_move_iterator(ovec.end()));
       ovec.clear();
       ovec.swap(ls);
     }
   }
 
-  void send_osd_message(int target, MessageRef m) {
-    message_map[target].push_back(std::move(m));
+  template <class MsgT> // MsgT = MessageRef for ceph-osd and MessageURef for crimson-osd
+  void send_osd_message(int target, MsgT&& m) {
+    message_map[target].emplace_back(std::forward<MsgT>(m));
   }
   void send_notify(int to, const pg_notify_t &n);
   void send_query(int to, spg_t spgid, const pg_query_t &q);
@@ -190,8 +192,7 @@ struct PeeringCtx : BufferedRecoveryMessages {
   ObjectStore::Transaction transaction;
   HBHandle* handle = nullptr;
 
-  PeeringCtx(ceph_release_t r)
-    : BufferedRecoveryMessages(r) {}
+  PeeringCtx() = default;
 
   PeeringCtx(const PeeringCtx &) = delete;
   PeeringCtx &operator=(const PeeringCtx &) = delete;
@@ -226,8 +227,9 @@ struct PeeringCtxWrapper {
 
   PeeringCtxWrapper(PeeringCtxWrapper &&ctx) = default;
 
-  void send_osd_message(int target, MessageRef m) {
-    msgs.send_osd_message(target, std::move(m));
+  template <class MsgT> // MsgT = MessageRef for ceph-osd and MessageURef for crimson-osd
+  void send_osd_message(int target, MsgT&& m) {
+    msgs.send_osd_message(target, std::forward<MsgT>(m));
   }
   void send_notify(int to, const pg_notify_t &n) {
     msgs.send_notify(to, n);
@@ -269,8 +271,13 @@ public:
     virtual uint64_t get_snap_trimq_size() const = 0;
 
     /// Send cluster message to osd
+    #if defined(WITH_SEASTAR)
+    virtual void send_cluster_message(
+      int osd, MessageURef m, epoch_t epoch, bool share_map_update=false) = 0;
+    #else
     virtual void send_cluster_message(
       int osd, MessageRef m, epoch_t epoch, bool share_map_update=false) = 0;
+    #endif
     /// Send pg_created to mon
     virtual void send_pg_created(pg_t pgid) = 0;
 
@@ -1470,7 +1477,7 @@ public:
   uint64_t upacting_features = CEPH_FEATURES_SUPPORTED_DEFAULT;
 
   /// most recently consumed osdmap's require_osd_version
-  ceph_release_t last_require_osd_release = ceph_release_t::unknown;
+  ceph_release_t last_require_osd_release;
 
   std::vector<int> want_acting; ///< non-empty while peering needs a new acting set
 
@@ -1723,7 +1730,6 @@ public:
     const std::vector<int>& newacting, int new_acting_primary,
     const pg_history_t& history,
     const PastIntervals& pi,
-    bool backfill,
     ObjectStore::Transaction &t);
 
   /// Init pg instance from disk state
@@ -2310,6 +2316,16 @@ public:
     ceph_assert(!is_primary());
     return !pg_log.get_log().has_write_since(
       hoid, get_min_last_complete_ondisk());
+  }
+
+  /**
+   * Returns whether the current acting set is able to go active
+   * and serve writes. It needs to satisfy min_size and any
+   * applicable stretch cluster constraints.
+   */
+  bool acting_set_writeable() {
+    return (actingset.size() >= pool.info.min_size) &&
+      (pool.info.stretch_set_can_peer(acting, *get_osdmap(), NULL));
   }
 
   /**

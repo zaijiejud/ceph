@@ -17,7 +17,7 @@
 
 enum {
   UPDATE_OBJ,
-  REMOVE_OBJ,
+  INVALIDATE_OBJ,
 };
 
 #define CACHE_FLAG_DATA           0x01
@@ -125,6 +125,11 @@ struct RGWCacheNotifyInfo {
   static void generate_test_instances(list<RGWCacheNotifyInfo*>& o);
 };
 WRITE_CLASS_ENCODER(RGWCacheNotifyInfo)
+inline std::ostream& operator <<(std::ostream& m, const RGWCacheNotifyInfo& cni) {
+  return m << "[op: " << cni.op << ", obj: " << cni.obj
+	   << ", ofs" << cni.ofs << ", ns" << cni.ns << "]";
+}
+
 
 class RGWChainedCache {
 public:
@@ -168,7 +173,7 @@ class ObjectCache {
   bool enabled;
   ceph::timespan expiry;
 
-  void touch_lru(const string& name, ObjectCacheEntry& entry,
+  void touch_lru(const DoutPrefixProvider *dpp, const string& name, ObjectCacheEntry& entry,
 		 std::list<string>::iterator& lru_iter);
   void remove_lru(const string& name, std::list<string>::iterator& lru_iter);
   void invalidate_lru(ObjectCacheEntry& entry);
@@ -178,10 +183,10 @@ class ObjectCache {
 public:
   ObjectCache() : lru_size(0), lru_counter(0), lru_window(0), cct(NULL), enabled(false) { }
   ~ObjectCache();
-  int get(const std::string& name, ObjectCacheInfo& bl, uint32_t mask, rgw_cache_entry_info *cache_info);
-  std::optional<ObjectCacheInfo> get(const std::string& name) {
+  int get(const DoutPrefixProvider *dpp, const std::string& name, ObjectCacheInfo& bl, uint32_t mask, rgw_cache_entry_info *cache_info);
+  std::optional<ObjectCacheInfo> get(const DoutPrefixProvider *dpp, const std::string& name) {
     std::optional<ObjectCacheInfo> info{std::in_place};
-    auto r = get(name, *info, 0, nullptr);
+    auto r = get(dpp, name, *info, 0, nullptr);
     return r < 0 ? std::nullopt : info;
   }
 
@@ -198,15 +203,16 @@ public:
     }
   }
 
-  void put(const std::string& name, ObjectCacheInfo& bl, rgw_cache_entry_info *cache_info);
-  bool remove(const std::string& name);
+  void put(const DoutPrefixProvider *dpp, const std::string& name, ObjectCacheInfo& bl, rgw_cache_entry_info *cache_info);
+  bool invalidate_remove(const DoutPrefixProvider *dpp, const std::string& name);
   void set_ctx(CephContext *_cct) {
     cct = _cct;
     lru_window = cct->_conf->rgw_cache_lru_size / 2;
     expiry = std::chrono::seconds(cct->_conf.get_val<uint64_t>(
 						"rgw_cache_expiry_interval"));
   }
-  bool chain_cache_entry(std::initializer_list<rgw_cache_entry_info*> cache_info_entries,
+  bool chain_cache_entry(const DoutPrefixProvider *dpp,
+                         std::initializer_list<rgw_cache_entry_info*> cache_info_entries,
 			 RGWChainedCache::Entry *chained_entry);
 
   void set_enabled(bool status);
